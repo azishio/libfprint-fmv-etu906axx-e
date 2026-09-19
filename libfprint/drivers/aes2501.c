@@ -474,6 +474,11 @@ capture_read_strip_cb (FpiUsbTransfer *transfer, FpDevice *_dev,
     }
   else
     {
+      if (self->strips_len >= MAX_FRAMES)
+        {
+          fpi_ssm_mark_failed (ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+          return;
+        }
       /* obtain next strip */
       /* FIXME: would preallocating strip buffers be a decent optimization? */
       struct fpi_frame *stripe = g_malloc (FRAME_WIDTH * FRAME_HEIGHT / 2 + sizeof (struct fpi_frame));

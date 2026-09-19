@@ -17,7 +17,7 @@ static void
 make_connect (guint8 *buffer)
 {
   memset (buffer, 0, CONNECT_SIZE);
-  memcpy (buffer, egismoc_read_prefix, egismoc_read_prefix_len);
+  memcpy (buffer, egismoc_read_prefix, G_N_ELEMENTS (egismoc_read_prefix));
   set_frame_length (buffer, CONNECT_SIZE);
   buffer[14] = SDCP_RANDOM_SIZE;
   buffer[48] = 1; /* One byte opaque certificate; crypto validation is separate. */
@@ -104,7 +104,7 @@ test_response_bounds (void)
   const guint8 suffix[] = {0x90, 0x00};
   guint8 buffer[16] = {0};
 
-  memcpy (buffer, egismoc_read_prefix, egismoc_read_prefix_len);
+  memcpy (buffer, egismoc_read_prefix, G_N_ELEMENTS (egismoc_read_prefix));
   memcpy (buffer + 10, prefix, sizeof (prefix));
   memcpy (buffer + 14, suffix, sizeof (suffix));
   for (gsize length = 0; length < 12; length++)
@@ -330,7 +330,7 @@ test_transport_clear (FpDevice *device)
   transfer.ssm = self->cmd_ssm;
   transfer.buffer = g_malloc0 (16);
   transfer.actual_length = 16;
-  memcpy (transfer.buffer, egismoc_read_prefix, egismoc_read_prefix_len);
+  memcpy (transfer.buffer, egismoc_read_prefix, G_N_ELEMENTS (egismoc_read_prefix));
   set_frame_length (transfer.buffer, 16);
   transfer.buffer[14] = 0x90;
   if (mode == 1)
@@ -391,11 +391,35 @@ test_transport_completion (void)
   g_assert_no_error (error);
 }
 
+static void
+test_delete_command_lengths (void)
+{
+  g_autoptr(FpDevice) device = g_object_new (test_egis_device_get_type(), NULL);
+  FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
+  self->enrolled_ids = g_ptr_array_new_with_free_func (g_free);
+  for (guint n = 0; n <= EGISMOC_MAX_ENROLL_NUM; n++)
+    {
+      gsize length;
+      g_autofree guint8 *command = egismoc_get_delete_cmd (device, NULL, &length);
+      FpiByteReader reader = FPI_BYTE_READER_INIT (command, length);
+      guint16 outer, inner;
+      g_assert_true (fpi_byte_reader_skip (&reader, 2));
+      g_assert_true (fpi_byte_reader_get_uint16_be (&reader, &outer));
+      g_assert_true (fpi_byte_reader_skip (&reader, G_N_ELEMENTS (cmd_delete_prefix)));
+      g_assert_true (fpi_byte_reader_get_uint16_be (&reader, &inner));
+      g_assert_cmpuint (outer, ==, n * SDCP_ENROLLMENT_ID_SIZE + 7);
+      g_assert_cmpuint (inner, ==, n * SDCP_ENROLLMENT_ID_SIZE);
+      g_ptr_array_add (self->enrolled_ids, g_malloc0 (SDCP_ENROLLMENT_ID_SIZE));
+    }
+  g_clear_pointer (&self->enrolled_ids, g_ptr_array_unref);
+}
+
 int
 main (int argc, char **argv)
 {
   g_test_init (&argc, &argv, NULL);
   g_test_add_func ("/egismoc/connect-parser", test_connect_parser);
+  g_test_add_func ("/egismoc/delete-command-lengths", test_delete_command_lengths);
   g_test_add_func ("/egismoc/response-bounds", test_response_bounds);
   g_test_add_func ("/egismoc/cancel-drains-wait-ssm", test_cancel_drains_wait_ssm);
   g_test_add_func ("/egismoc/delete-invalid-id", test_delete_missing_id_done);

@@ -338,7 +338,10 @@ msg_parse_regs (FpiDeviceEtes603 *dev)
   struct egis_msg *msg_req = dev->req;
   struct egis_msg *msg_ans = dev->ans;
 
-  n_args = dev->ans_len - MSG_HDR_SIZE;
+  n_args = msg_req->egis_readreg.nb;
+  if (n_args == 0 || n_args > REG_MAX ||
+      dev->ans_len < MSG_HDR_SIZE + n_args)
+    return -1;
 
   if (msg_header_check (msg_ans))
     return -1;

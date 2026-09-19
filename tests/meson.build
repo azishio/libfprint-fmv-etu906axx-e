@@ -426,3 +426,19 @@ if valgrind.found() and libfprint_sanitizers.length() == 0
             'LIBFPRINT_TEST_WRAPPER=' + ' '.join(libfprint_wrapper),
         ])
 endif
+
+# Reuse one source, compiling only the implementation under test each time.
+foreach driver: ['print', 'goodixmoc', 'synaptics', 'upektc_img', 'etes603', 'elan', 'fpcmoc', 'upekts', 'realtek', 'vfs101', 'vfs0050', 'uru4000', 'focaltech_moc', 'vfs301']
+    if driver == 'print' or driver in drivers
+        bounds_sources = ['test-security-bounds.c']
+        if driver in ['upekts', 'upektc_img']
+            bounds_sources += ['../libfprint/drivers/upek_proto.c']
+        endif
+        bounds_test = executable('test-security-' + driver,
+            bounds_sources,
+            dependencies: libfprint_private_dep,
+            c_args: common_cflags + ['-DTEST_' + driver.to_upper()],
+            link_whole: test_utils)
+        test('security-' + driver, bounds_test, suite: ['unit-tests'], env: envs)
+    endif
+endforeach

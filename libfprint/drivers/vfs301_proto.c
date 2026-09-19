@@ -385,6 +385,11 @@ img_process_data (int first_block, FpDeviceVfs301 *dev, const guint8 *buf, int l
   int finished_scan;
 #endif
 
+  /* anti-overengineering: 1 MiB per swipe; revise with longer capture evidence. */
+  if (no_lines > 1024 * 1024 / VFS301_FP_OUTPUT_WIDTH -
+      (first_block ? 0 : dev->scanline_count))
+    return -1;
+
   if (first_block)
     {
       last_img_height = 0;
@@ -520,10 +525,16 @@ vfs301_proto_process_event_cb (FpiUsbTransfer *transfer,
   else
     {
       FpiUsbTransfer *new;
-      if (!vfs301_proto_process_data (self,
-                                      transfer->length == VFS301_FP_RECV_LEN_1,
-                                      transfer->buffer,
-                                      transfer->actual_length))
+      int result = vfs301_proto_process_data (self,
+                                              transfer->length == VFS301_FP_RECV_LEN_1,
+                                              transfer->buffer,
+                                              transfer->actual_length);
+      if (result < 0)
+        {
+          self->recv_progress = VFS301_FAILURE;
+          return;
+        }
+      if (!result)
         {
           self->recv_progress = VFS301_ENDED;
           return;

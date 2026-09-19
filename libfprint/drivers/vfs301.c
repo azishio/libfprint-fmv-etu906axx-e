@@ -121,7 +121,11 @@ m_loop_state (FpiSsm *ssm, FpDevice *_dev)
     case M_READ_PRINT_POLL:
       {
         int rv = vfs301_proto_process_event_poll (self);
-        g_assert (rv != VFS301_FAILURE);
+        if (rv == VFS301_FAILURE)
+          {
+            fpi_ssm_mark_failed (ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+            return;
+          }
         if (rv == VFS301_ONGOING)
           fpi_ssm_jump_to_state (ssm, M_READ_PRINT_WAIT);
         else
@@ -145,6 +149,13 @@ m_loop_state (FpiSsm *ssm, FpDevice *_dev)
     default:
       g_assert_not_reached ();
     }
+}
+
+static void
+m_loop_complete (FpiSsm *ssm, FpDevice *dev, GError *error)
+{
+  if (error)
+    fpi_image_device_session_error (FP_IMAGE_DEVICE (dev), error);
 }
 
 /* Exec init sequential state machine */
@@ -199,7 +210,7 @@ dev_change_state (FpImageDevice *dev, FpiImageDeviceState state)
 
   /* Start a capture operation. */
   ssm_loop = fpi_ssm_new (FP_DEVICE (dev), m_loop_state, M_LOOP_NUM_STATES);
-  fpi_ssm_start (ssm_loop, NULL);
+  fpi_ssm_start (ssm_loop, m_loop_complete);
 }
 
 static void

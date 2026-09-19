@@ -1193,7 +1193,12 @@ m_init_state (FpiSsm *ssm, FpDevice *_dev)
       break;
 
     case M_INIT_4_CHECK_CONTRAST:
-      /* Check contrast */
+      /* Empty calibration images cannot determine contrast. */
+      if (self->height == 0)
+        {
+          fpi_ssm_mark_failed (ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+          return;
+        }
       vfs_check_contrast (self);
 
       if (self->contrast <= 6 || self->counter >= 12)

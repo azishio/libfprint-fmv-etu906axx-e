@@ -197,7 +197,7 @@ jobs:
       - name: Run ASan and UBSan tests
         run: |
           meson setup build-sanitize \
-            -Ddrivers=egismoc,virtual_image,virtual_device,virtual_device_storage,virtual_sdcp \
+            -Ddrivers=egismoc,virtual_image,virtual_device,virtual_device_storage,virtual_sdcp,goodixmoc,fpcmoc,realtek,upekts,upektc_img,uru4000,synaptics,etes603,vfs101,elan,focaltech_moc,aes2501,aes1660,egis0570,vfs0050,vfs301 \
             -Dintrospection=true \
             -Ddoc=false \
             -Dgtk-examples=false \

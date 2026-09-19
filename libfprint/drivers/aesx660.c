@@ -294,6 +294,11 @@ process_stripe_data (FpiSsm *ssm, FpiDeviceAesX660 *self,
       return 0;
     }
 
+  /* anti-overengineering: 1 MiB per swipe; revise with longer capture evidence. */
+  if (priv->strips_len >= 1024 * 1024 /
+      (cls->assembling_ctx->frame_width * FRAME_HEIGHT / 2 + sizeof (struct fpi_frame)))
+    return -1;
+
   stripe = g_malloc (cls->assembling_ctx->frame_width * FRAME_HEIGHT / 2 + sizeof (struct fpi_frame));     /* 4 bpp */
   stripdata = stripe->data;
 
@@ -398,10 +403,15 @@ capture_read_stripe_data_cb (FpiUsbTransfer *transfer,
       if (priv->stripe_packet->len < payload_length + AESX660_HEADER_SIZE)
         break;
 
-      finger_missing |= process_stripe_data (transfer->ssm,
-                                             self,
-                                             priv->stripe_packet->data,
-                                             priv->stripe_packet->len);
+      int result = process_stripe_data (transfer->ssm, self,
+                                        priv->stripe_packet->data,
+                                        priv->stripe_packet->len);
+      if (result < 0)
+        {
+          fpi_ssm_mark_failed (transfer->ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+          return;
+        }
+      finger_missing |= result;
 
       g_byte_array_set_size (priv->stripe_packet, 0);
     }

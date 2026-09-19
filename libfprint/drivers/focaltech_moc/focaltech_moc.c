@@ -1685,6 +1685,13 @@ focaltech_delete_run_state (FpiSsm *ssm, FpDevice *device)
         g_variant_get (data, "(@ay)", &user_id_var);
         user_id = g_variant_get_fixed_array (user_id_var, &user_id_len, 1);
 
+        if (user_id_len != sizeof (struct UserId))
+          {
+            fpi_ssm_mark_failed (self->task_ssm,
+                                 fpi_device_error_new (FP_DEVICE_ERROR_DATA_INVALID));
+            return;
+          }
+
         if (focaltech_moc_get_enrolled_info_item (self, (uint8_t *) user_id, &item, &index) == 0)
           self->delete_slot = index;
 

@@ -476,6 +476,13 @@ receive_callback (FpiUsbTransfer *transfer, FpDevice *device,
     }
   else
     {
+      /* Raw swipes contain repeated rows; VFS_MAX_HEIGHT limits assembled output.
+       * anti-overengineering: 8 MiB raw budget; revise with longer capture evidence. */
+      if (transfer->actual_length > 8 * 1024 * 1024 - self->bytes)
+        {
+          fpi_ssm_mark_failed (transfer->ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+          return;
+        }
       self->bytes += transfer->actual_length;
 
       /* Try reading more data */

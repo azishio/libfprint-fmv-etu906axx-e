@@ -714,6 +714,23 @@ imaging_run_state (FpiSsm *ssm, FpDevice *_dev)
           return;
         }
 
+      /* Missing blocks repeat source rows but still consume output rows. */
+      for (i = 0, r = 0, to = 0;
+           i < G_N_ELEMENTS (img->block_info) && r < img->num_lines; i++)
+        {
+          num_lines = img->block_info[i].num_lines;
+          if (num_lines > img->num_lines - r || num_lines > IMAGE_HEIGHT - to)
+            {
+              fpi_ssm_mark_failed (ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+              return;
+            }
+          if (num_lines == 0)
+            break;
+          to += num_lines;
+          if (!(img->block_info[i].flags & BLOCKF_NOT_PRESENT))
+            r += num_lines;
+        }
+
       /* Detect whether image is encrypted (by checking how noisy it is) */
       dev2 = calc_dev2 (img);
       fp_dbg ("dev2: %d", dev2);

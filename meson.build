@@ -210,6 +210,7 @@ driver_helper_mapping = {
     'aes3500' : [ 'aeslib', 'aes3k' ],
     'aes4000' : [ 'aeslib', 'aes3k' ],
     'egismoc' : [ 'sdcp' ],
+    'egis0570' : [ 'pixman' ],
     'elanspi' : [ 'udev' ],
     'uru4000' : [ 'openssl' ],
     'virtual_image'          : [ 'virtual' ],
@@ -260,7 +261,7 @@ foreach i : driver_helpers
         endif
     endforeach
 
-    if i == 'aes3k'
+    if i == 'aes3k' or i == 'pixman'
         imaging_dep = dependency('pixman-1', required: false)
         if not imaging_dep.found()
             error('pixman is required for @0@ and possibly others'.format(driver))

@@ -155,10 +155,15 @@ capture_reqs_cb (FpiUsbTransfer *transfer, FpDevice *device,
 }
 
 static int
-upektc_img_process_image_frame (unsigned char *image_buf, unsigned char *cmd_res)
+upektc_img_process_image_frame (unsigned char *image_buf, size_t remaining,
+                                unsigned char *cmd_res, size_t response_size)
 {
   int offset = 8;
-  int len = ((cmd_res[5] & 0x0f) << 8) | (cmd_res[6]);
+  int len;
+
+  if (response_size < 8)
+    return -1;
+  len = ((cmd_res[5] & 0x0f) << 8) | (cmd_res[6]);
 
   len -= 1;
   if (cmd_res[7] == 0x2c)
@@ -168,6 +173,9 @@ upektc_img_process_image_frame (unsigned char *image_buf, unsigned char *cmd_res
     }
   if (cmd_res[7] == 0x20)
     len -= 4;
+  if (len < 0 || len > remaining || offset > response_size ||
+      len > response_size - offset)
+    return -1;
   memcpy (image_buf, cmd_res + offset, len);
 
   return len;
@@ -183,6 +191,7 @@ capture_read_data_cb (FpiUsbTransfer *transfer, FpDevice *device,
   unsigned char *data = self->response;
   FpImage *img;
   size_t response_size;
+  int frame_len;
 
   if (error)
     {
@@ -213,6 +222,18 @@ capture_read_data_cb (FpiUsbTransfer *transfer, FpDevice *device,
       return;
     }
 
+  if ((!self->response_rest && transfer->actual_length < 8) ||
+      (self->response_rest && transfer->actual_length < self->response_rest))
+    {
+      fpi_ssm_mark_failed (transfer->ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+      return;
+    }
+  response_size = (((data[5] & 0x0f) << 8) | data[6]) + 9;
+  if (response_size > sizeof (self->response))
+    {
+      fpi_ssm_mark_failed (transfer->ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+      return;
+    }
   if (!self->response_rest)
     {
       response_size = ((data[5] & 0x0f) << 8) + data[6];
@@ -222,7 +243,11 @@ capture_read_data_cb (FpiUsbTransfer *transfer, FpDevice *device,
           fp_dbg ("response_size is %lu, actual_length is %d",
                   (gulong) response_size, (gint) transfer->actual_length);
           fp_dbg ("Waiting for rest of transfer");
-          BUG_ON (self->response_rest);
+          if (transfer->actual_length != 64)
+            {
+              fpi_ssm_mark_failed (transfer->ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+              return;
+            }
           self->response_rest = response_size - transfer->actual_length;
           fpi_ssm_jump_to_state (transfer->ssm, CAPTURE_READ_DATA);
           return;
@@ -237,6 +262,11 @@ capture_read_data_cb (FpiUsbTransfer *transfer, FpDevice *device,
         {
         /* No finger */
         case 0x28:
+          if (response_size <= 18)
+            {
+              fpi_ssm_mark_failed (transfer->ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+              return;
+            }
           fp_dbg ("18th byte is %.2x", data[18]);
           switch (data[18])
             {
@@ -319,19 +349,35 @@ capture_read_data_cb (FpiUsbTransfer *transfer, FpDevice *device,
 
         /* Plain image frame */
         case 0x24:
-          self->image_size +=
-            upektc_img_process_image_frame (self->image_bits + self->image_size,
-                                            data);
+          frame_len = upektc_img_process_image_frame (self->image_bits + self->image_size,
+                                                       self->expected_image_size - self->image_size,
+                                                       data, response_size);
+          if (frame_len < 0)
+            {
+              fpi_ssm_mark_failed (transfer->ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+              return;
+            }
+          self->image_size += frame_len;
           fpi_ssm_jump_to_state (transfer->ssm,
                                  CAPTURE_ACK_FRAME);
           break;
 
         /* Last image frame */
         case 0x20:
-          self->image_size +=
-            upektc_img_process_image_frame (self->image_bits + self->image_size,
-                                            data);
-          BUG_ON (self->image_size != self->expected_image_size);
+          frame_len = upektc_img_process_image_frame (self->image_bits + self->image_size,
+                                                       self->expected_image_size - self->image_size,
+                                                       data, response_size);
+          if (frame_len < 0)
+            {
+              fpi_ssm_mark_failed (transfer->ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+              return;
+            }
+          self->image_size += frame_len;
+          if (self->image_size != self->expected_image_size)
+            {
+              fpi_ssm_mark_failed (transfer->ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+              return;
+            }
           fp_dbg ("Image size is %lu",
                   (gulong) self->image_size);
           img = fp_image_new (img_class->img_width, img_class->img_height);

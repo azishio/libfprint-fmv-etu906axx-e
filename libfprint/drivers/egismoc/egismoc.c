@@ -89,7 +89,7 @@ egismoc_validate_response_prefix (const guchar *buffer_in,
                                   const guchar *valid_prefix,
                                   const gsize   valid_prefix_len)
 {
-  const gsize offset = egismoc_read_prefix_len + EGISMOC_CHECK_BYTES_LENGTH;
+  const gsize offset = G_N_ELEMENTS (egismoc_read_prefix) + EGISMOC_CHECK_BYTES_LENGTH;
   const gboolean result = buffer_in && buffer_in_len >= offset &&
                           valid_prefix_len <= buffer_in_len - offset &&
                           memcmp (buffer_in + offset,
@@ -155,10 +155,10 @@ egismoc_validate_response (const guint8 *buffer, gsize length)
 {
   FpiByteReader reader;
   guint32 payload_length;
-  const gsize header_length = egismoc_read_prefix_len + EGISMOC_CHECK_BYTES_LENGTH + 4;
+  const gsize header_length = G_N_ELEMENTS (egismoc_read_prefix) + EGISMOC_CHECK_BYTES_LENGTH + 4;
 
   if (!buffer || length < header_length || length > EGISMOC_USB_IN_RECV_LENGTH ||
-      memcmp (buffer, egismoc_read_prefix, egismoc_read_prefix_len) != 0)
+      memcmp (buffer, egismoc_read_prefix, G_N_ELEMENTS (egismoc_read_prefix)) != 0)
     return FALSE;
 
   fpi_byte_reader_init (&reader, buffer, length);
@@ -317,7 +317,7 @@ egismoc_exec_cmd (FpDevice         *device,
    * egismoc_get_check_bytes() method and payload is what is passed via the cmd
    * parameter
    */
-  buffer_out_length = egismoc_write_prefix_len
+  buffer_out_length = G_N_ELEMENTS (egismoc_write_prefix)
                       + EGISMOC_CHECK_BYTES_LENGTH
                       + cmd_length;
 
@@ -326,7 +326,7 @@ egismoc_exec_cmd (FpDevice         *device,
 
   /* Prefix */
   written &= fpi_byte_writer_put_data (&writer, egismoc_write_prefix,
-                                       egismoc_write_prefix_len);
+                                       G_N_ELEMENTS (egismoc_write_prefix));
 
   /* Check Bytes - leave them as 00 for now then later generate and copy over
    * the real ones */
@@ -338,7 +338,7 @@ egismoc_exec_cmd (FpDevice         *device,
   /* Now fetch and set the "real" check bytes based on the currently
    * assembled payload */
   check_value = egismoc_get_check_bytes (FPI_BYTE_READER (&writer));
-  fpi_byte_writer_set_pos (&writer, egismoc_write_prefix_len);
+  fpi_byte_writer_set_pos (&writer, G_N_ELEMENTS (egismoc_write_prefix));
   written &= fpi_byte_writer_put_uint16_be (&writer, check_value);
 
   /* destroy cmd if requested */
@@ -419,7 +419,7 @@ egismoc_finger_on_sensor_cb (FpiUsbTransfer *transfer,
       return;
     }
 
-  if (transfer->actual_length < 4 + rsp_sensor_has_finger_suffix_len ||
+  if (transfer->actual_length < 4 + G_N_ELEMENTS (rsp_sensor_has_finger_suffix) ||
       memcmp (transfer->buffer, egismoc_read_prefix, 4) != 0)
     {
       fpi_ssm_mark_failed (transfer->ssm,
@@ -431,7 +431,7 @@ egismoc_finger_on_sensor_cb (FpiUsbTransfer *transfer,
   if (egismoc_validate_response_suffix (transfer->buffer,
                                         transfer->actual_length,
                                         rsp_sensor_has_finger_suffix,
-                                        rsp_sensor_has_finger_suffix_len))
+                                        G_N_ELEMENTS (rsp_sensor_has_finger_suffix)))
     {
       fpi_device_report_finger_status (device, FP_FINGER_STATUS_PRESENT);
       fpi_ssm_next_state (transfer->ssm);
@@ -524,7 +524,7 @@ egismoc_list_fill_enrolled_ids_cb (FpDevice *device,
       (length_in - EGISMOC_LIST_RESPONSE_PREFIX_SIZE - EGISMOC_LIST_RESPONSE_SUFFIX_SIZE) % SDCP_ENROLLMENT_ID_SIZE != 0 ||
       (length_in - EGISMOC_LIST_RESPONSE_PREFIX_SIZE - EGISMOC_LIST_RESPONSE_SUFFIX_SIZE) / SDCP_ENROLLMENT_ID_SIZE > EGISMOC_MAX_ENROLL_NUM ||
       !(egismoc_validate_response_suffix (buffer_in, length_in,
-                                          rsp_commit_success_suffix, rsp_commit_success_suffix_len) ||
+                                          rsp_commit_success_suffix, G_N_ELEMENTS (rsp_commit_success_suffix)) ||
         (length_in == EGISMOC_LIST_RESPONSE_PREFIX_SIZE + EGISMOC_LIST_RESPONSE_SUFFIX_SIZE &&
          egismoc_validate_response_suffix (buffer_in, length_in,
                                            rsp_list_empty_suffix, sizeof (rsp_list_empty_suffix)))))
@@ -581,7 +581,7 @@ egismoc_list_run_state (FpiSsm   *ssm,
   switch (fpi_ssm_get_cur_state (ssm))
     {
     case LIST_GET_ENROLLED_IDS:
-      egismoc_exec_cmd (device, cmd_list, cmd_list_len, NULL,
+      egismoc_exec_cmd (device, cmd_list, G_N_ELEMENTS (cmd_list), NULL,
                         egismoc_list_fill_enrolled_ids_cb);
       break;
 
@@ -646,7 +646,7 @@ egismoc_get_delete_cmd (FpDevice *device,
 
   const gsize body_length = sizeof (guchar) * SDCP_ENROLLMENT_ID_SIZE * num_to_delete;
   /* total_length is the 6 various bytes plus prefix and body payload */
-  const gsize total_length = (sizeof (guchar) * 6) + cmd_delete_prefix_len + body_length;
+  const gsize total_length = (sizeof (guchar) * 6) + G_N_ELEMENTS (cmd_delete_prefix) + body_length;
 
   /* pre-fill entire payload with 00s */
   fpi_byte_writer_init_with_size (&writer, total_length, TRUE);
@@ -654,39 +654,13 @@ egismoc_get_delete_cmd (FpDevice *device,
   /* start with 00 00 (just move starting offset up by 2) */
   written &= fpi_byte_writer_set_pos (&writer, 2);
 
-  /* Size Counter bytes */
-  /* "easiest" way to handle 2-bytes size for counter is to hard-code logic for
-   * when we go to the 2nd byte
-   * note this will not work in case any model ever supports more than 14 prints
-   * (assumed max is 10) */
-  if (num_to_delete > 7)
-    {
-      written &= fpi_byte_writer_put_uint8 (&writer, 0x01);
-      written &= fpi_byte_writer_put_uint8 (&writer, ((num_to_delete - 8) * 0x20) + 0x07);
-    }
-  else
-    {
-      /* first byte is 0x00, just skip it */
-      written &= fpi_byte_writer_change_pos (&writer, 1);
-      written &= fpi_byte_writer_put_uint8 (&writer, (num_to_delete * 0x20) + 0x07);
-    }
+  written &= fpi_byte_writer_put_uint16_be (&writer, body_length + 7);
 
   /* command prefix */
   written &= fpi_byte_writer_put_data (&writer, cmd_delete_prefix,
-                                       cmd_delete_prefix_len);
+                                       G_N_ELEMENTS (cmd_delete_prefix));
 
-  /* 2-bytes size logic for counter again */
-  if (num_to_delete > 7)
-    {
-      written &= fpi_byte_writer_put_uint8 (&writer, 0x01);
-      written &= fpi_byte_writer_put_uint8 (&writer, (num_to_delete - 8) * 0x20);
-    }
-  else
-    {
-      /* first byte is 0x00, just skip it */
-      written &= fpi_byte_writer_change_pos (&writer, 1);
-      written &= fpi_byte_writer_put_uint8 (&writer, num_to_delete * 0x20);
-    }
+  written &= fpi_byte_writer_put_uint16_be (&writer, body_length);
 
   /* append desired enrollment_id(s) */
 
@@ -748,7 +722,7 @@ egismoc_delete_cb (FpDevice *device,
   if (egismoc_validate_response_prefix (buffer_in,
                                         length_in,
                                         rsp_delete_success_prefix,
-                                        rsp_delete_success_prefix_len))
+                                        G_N_ELEMENTS (rsp_delete_success_prefix)))
     {
       if (fpi_device_get_current_action (device) == FPI_DEVICE_ACTION_CLEAR_STORAGE)
         {
@@ -787,7 +761,7 @@ egismoc_delete_run_state (FpiSsm   *ssm,
     {
     case DELETE_GET_ENROLLED_IDS:
       /* get enrolled_ids from device for use building delete payload below */
-      egismoc_exec_cmd (device, cmd_list, cmd_list_len, NULL,
+      egismoc_exec_cmd (device, cmd_list, G_N_ELEMENTS (cmd_list), NULL,
                         egismoc_list_fill_enrolled_ids_cb);
       break;
 
@@ -889,7 +863,7 @@ egismoc_enroll_commit_cb (FpDevice *device,
   if (!egismoc_validate_response_suffix (buffer_in,
                                          length_in,
                                          rsp_commit_success_suffix,
-                                         rsp_commit_success_suffix_len))
+                                         G_N_ELEMENTS (rsp_commit_success_suffix)))
     {
       g_propagate_error (&error, fpi_device_error_new_msg (FP_DEVICE_ERROR_UNTRUSTED,
                                                            "Enrollment was rejected by the device"));
@@ -897,7 +871,7 @@ egismoc_enroll_commit_cb (FpDevice *device,
       return;
     }
 
-  egismoc_exec_cmd (device, cmd_sensor_reset, cmd_sensor_reset_len,
+  egismoc_exec_cmd (device, cmd_sensor_reset, G_N_ELEMENTS (cmd_sensor_reset),
                     NULL, egismoc_enroll_commit_complete_cb);
 }
 
@@ -915,7 +889,7 @@ egismoc_enroll_commit (FpSdcpDevice *sdcp_device,
 
   fpi_byte_writer_init (&writer);
   if (!fpi_byte_writer_put_data (&writer, cmd_new_print_prefix,
-                                 cmd_new_print_prefix_len))
+                                 G_N_ELEMENTS (cmd_new_print_prefix)))
     goto out_fail;
 
   new_id = g_bytes_get_data (id, &new_id_len);
@@ -960,11 +934,6 @@ egismoc_enroll_status_report (FpDevice    *device,
       fpi_device_enroll_progress (device, enroll_print->stage, enroll_print->print, NULL);
       break;
 
-    case ENROLL_STATUS_COMPLETE:
-      fp_info ("Enrollment was successful!");
-      fpi_device_enroll_complete (device, g_object_ref (enroll_print->print), NULL);
-      break;
-
     default:
       if (error)
         fpi_ssm_mark_failed (self->task_ssm, error);
@@ -995,7 +964,7 @@ egismoc_read_capture_cb (FpDevice *device,
   if (egismoc_validate_response_suffix (buffer_in,
                                         length_in,
                                         rsp_read_success_suffix,
-                                        rsp_read_success_suffix_len))
+                                        G_N_ELEMENTS (rsp_read_success_suffix)))
     {
       egismoc_enroll_status_report (device, enroll_print,
                                     ENROLL_STATUS_PARTIAL_OK, NULL);
@@ -1008,14 +977,14 @@ egismoc_read_capture_cb (FpDevice *device,
       if (egismoc_validate_response_suffix (buffer_in,
                                             length_in,
                                             rsp_read_offcenter_suffix,
-                                            rsp_read_offcenter_suffix_len))
+                                            G_N_ELEMENTS (rsp_read_offcenter_suffix)))
         error = fpi_device_retry_new (FP_DEVICE_RETRY_CENTER_FINGER);
 
       /* "Sensor is dirty" */
       else if (egismoc_validate_response_prefix (buffer_in,
                                                  length_in,
                                                  rsp_read_dirty_prefix,
-                                                 rsp_read_dirty_prefix_len))
+                                                 G_N_ELEMENTS (rsp_read_dirty_prefix)))
         error = fpi_device_retry_new_msg (FP_DEVICE_RETRY_REMOVE_FINGER,
                                           "Your device is having trouble recognizing you. "
                                           "Make sure your sensor is clean.");
@@ -1052,11 +1021,11 @@ egismoc_enroll_starting_cb (FpDevice *device,
       return;
     }
 
-  if (length_in != EGISMOC_ENROLL_STARTING_RESPONSE_PREFIX_SIZE + SDCP_NONCE_SIZE + rsp_enroll_starting_suffix_len ||
+  if (length_in != EGISMOC_ENROLL_STARTING_RESPONSE_PREFIX_SIZE + SDCP_NONCE_SIZE + G_N_ELEMENTS (rsp_enroll_starting_suffix) ||
       !egismoc_validate_response_suffix (buffer_in,
                                          length_in,
                                          rsp_enroll_starting_suffix,
-                                         rsp_enroll_starting_suffix_len))
+                                         G_N_ELEMENTS (rsp_enroll_starting_suffix)))
     {
       fpi_ssm_mark_failed (self->task_ssm,
                            fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO,
@@ -1089,15 +1058,15 @@ egismoc_enroll_check_cb (FpDevice *device,
     }
 
   /* Check that the read payload reports "not yet enrolled" */
-  if (length_in == EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + rsp_check_not_yet_enrolled_suffix_len &&
+  if (length_in == EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + G_N_ELEMENTS (rsp_check_not_yet_enrolled_suffix) &&
       egismoc_validate_response_suffix (buffer_in, length_in,
                                          rsp_check_not_yet_enrolled_suffix,
-                                         rsp_check_not_yet_enrolled_suffix_len))
+                                         G_N_ELEMENTS (rsp_check_not_yet_enrolled_suffix)))
     fpi_ssm_next_state (self->task_ssm);
-  else if (length_in == EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + SDCP_MAC_SIZE + SDCP_ENROLLMENT_ID_SIZE + rsp_identify_match_suffix_len &&
+  else if (length_in == EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + SDCP_MAC_SIZE + SDCP_ENROLLMENT_ID_SIZE + G_N_ELEMENTS (rsp_identify_match_suffix) &&
            egismoc_validate_response_suffix (buffer_in, length_in,
                                               rsp_identify_match_suffix,
-                                              rsp_identify_match_suffix_len))
+                                              G_N_ELEMENTS (rsp_identify_match_suffix)))
     egismoc_enroll_status_report (device, NULL, ENROLL_STATUS_DUPLICATE,
                                   fpi_device_error_new (FP_DEVICE_ERROR_DATA_DUPLICATE));
   else
@@ -1141,8 +1110,8 @@ egismoc_get_check_cmd (FpDevice *device,
   /* prefix length can depend on the type */
   const gsize check_prefix_length = (fpi_device_get_driver_data (device) &
                                      EGISMOC_DRIVER_CHECK_PREFIX_TYPE2) ?
-                                    cmd_check_prefix_type2_len :
-                                    cmd_check_prefix_type1_len;
+                                    G_N_ELEMENTS (cmd_check_prefix_type2) :
+                                    G_N_ELEMENTS (cmd_check_prefix_type1);
 
   /* total_length is the 6 various bytes plus all other prefixes/suffixes and
    * the body payload */
@@ -1150,7 +1119,7 @@ egismoc_get_check_cmd (FpDevice *device,
                              + check_prefix_length
                              + SDCP_NONCE_SIZE
                              + body_length
-                             + cmd_check_suffix_len;
+                             + G_N_ELEMENTS (cmd_check_suffix);
 
   /* pre-fill entire payload with 00s */
   fpi_byte_writer_init_with_size (&writer, total_length, TRUE);
@@ -1158,49 +1127,17 @@ egismoc_get_check_cmd (FpDevice *device,
   /* start with 00 00 (just move starting offset up by 2) */
   written &= fpi_byte_writer_set_pos (&writer, 2);
 
-  /* Size Counter bytes */
-  /* "easiest" way to handle 2-bytes size for counter is to hard-code logic for
-   * when we go to the 2nd byte
-   * note this will not work in case any model ever supports more than 14 prints
-   * (assumed max is 10) */
-  if (self->enrolled_ids->len > 6)
-    {
-      written &= fpi_byte_writer_put_uint8 (&writer, 0x01);
-      written &= fpi_byte_writer_put_uint8 (&writer,
-                                            ((self->enrolled_ids->len - 7) * 0x20)
-                                            + 0x09);
-    }
-  else
-    {
-      /* first byte is 0x00, just skip it */
-      written &= fpi_byte_writer_change_pos (&writer, 1);
-      written &= fpi_byte_writer_put_uint8 (&writer,
-                                            ((self->enrolled_ids->len + 1) * 0x20) +
-                                            0x09);
-    }
+  written &= fpi_byte_writer_put_uint16_be (&writer, body_length + SDCP_NONCE_SIZE + 9);
 
   /* command prefix */
   if (fpi_device_get_driver_data (device) & EGISMOC_DRIVER_CHECK_PREFIX_TYPE2)
     written &= fpi_byte_writer_put_data (&writer, cmd_check_prefix_type2,
-                                         cmd_check_prefix_type2_len);
+                                         G_N_ELEMENTS (cmd_check_prefix_type2));
   else
     written &= fpi_byte_writer_put_data (&writer, cmd_check_prefix_type1,
-                                         cmd_check_prefix_type1_len);
+                                         G_N_ELEMENTS (cmd_check_prefix_type1));
 
-  /* 2-bytes size logic for counter again */
-  if (self->enrolled_ids->len > 6)
-    {
-      written &= fpi_byte_writer_put_uint8 (&writer, 0x01);
-      written &= fpi_byte_writer_put_uint8 (&writer,
-                                            (self->enrolled_ids->len - 7) * 0x20);
-    }
-  else
-    {
-      /* first byte is 0x00, just skip it */
-      written &= fpi_byte_writer_change_pos (&writer, 1);
-      written &= fpi_byte_writer_put_uint8 (&writer,
-                                            (self->enrolled_ids->len + 1) * 0x20);
-    }
+  written &= fpi_byte_writer_put_uint16_be (&writer, body_length + SDCP_NONCE_SIZE);
 
   if (fpi_device_get_current_action (device) == FPI_DEVICE_ACTION_ENROLL)
     written &= fpi_byte_writer_change_pos (&writer, SDCP_NONCE_SIZE);
@@ -1223,7 +1160,7 @@ egismoc_get_check_cmd (FpDevice *device,
 
   /* command suffix */
   written &= fpi_byte_writer_put_data (&writer, cmd_check_suffix,
-                                       cmd_check_suffix_len);
+                                       G_N_ELEMENTS (cmd_check_suffix));
   g_assert (written);
 
   if (length_out)
@@ -1246,7 +1183,7 @@ egismoc_enroll_run_state (FpiSsm   *ssm,
     {
     case ENROLL_GET_ENROLLED_IDS:
       /* get enrolled_ids from device for use in check stages below */
-      egismoc_exec_cmd (device, cmd_list, cmd_list_len,
+      egismoc_exec_cmd (device, cmd_list, G_N_ELEMENTS (cmd_list),
                         NULL, egismoc_list_fill_enrolled_ids_cb);
       break;
 
@@ -1261,12 +1198,12 @@ egismoc_enroll_run_state (FpiSsm   *ssm,
       break;
 
     case ENROLL_SENSOR_RESET:
-      egismoc_exec_cmd (device, cmd_sensor_reset, cmd_sensor_reset_len,
+      egismoc_exec_cmd (device, cmd_sensor_reset, G_N_ELEMENTS (cmd_sensor_reset),
                         NULL, egismoc_task_ssm_next_state_cb);
       break;
 
     case ENROLL_SENSOR_ENROLL:
-      egismoc_exec_cmd (device, cmd_sensor_enroll, cmd_sensor_enroll_len,
+      egismoc_exec_cmd (device, cmd_sensor_enroll, G_N_ELEMENTS (cmd_sensor_enroll),
                         NULL, egismoc_task_ssm_next_state_cb);
       break;
 
@@ -1275,7 +1212,7 @@ egismoc_enroll_run_state (FpiSsm   *ssm,
       break;
 
     case ENROLL_SENSOR_CHECK:
-      egismoc_exec_cmd (device, cmd_sensor_check, cmd_sensor_check_len,
+      egismoc_exec_cmd (device, cmd_sensor_check, G_N_ELEMENTS (cmd_sensor_check),
                         NULL, egismoc_task_ssm_next_state_cb);
       break;
 
@@ -1286,17 +1223,17 @@ egismoc_enroll_run_state (FpiSsm   *ssm,
       break;
 
     case ENROLL_START:
-      egismoc_exec_cmd (device, cmd_enroll_starting, cmd_enroll_starting_len,
+      egismoc_exec_cmd (device, cmd_enroll_starting, G_N_ELEMENTS (cmd_enroll_starting),
                         NULL, egismoc_enroll_starting_cb);
       break;
 
     case ENROLL_CAPTURE_SENSOR_RESET:
-      egismoc_exec_cmd (device, cmd_sensor_reset, cmd_sensor_reset_len,
+      egismoc_exec_cmd (device, cmd_sensor_reset, G_N_ELEMENTS (cmd_sensor_reset),
                         NULL, egismoc_task_ssm_next_state_cb);
       break;
 
     case ENROLL_CAPTURE_SENSOR_START_CAPTURE:
-      egismoc_exec_cmd (device, cmd_sensor_start_capture, cmd_sensor_start_capture_len,
+      egismoc_exec_cmd (device, cmd_sensor_start_capture, G_N_ELEMENTS (cmd_sensor_start_capture),
                         NULL,
                         egismoc_task_ssm_next_state_cb);
       break;
@@ -1306,17 +1243,17 @@ egismoc_enroll_run_state (FpiSsm   *ssm,
       break;
 
     case ENROLL_CAPTURE_POST_WAIT_FINGER:
-      egismoc_exec_cmd (device, cmd_capture_post_wait_finger, cmd_capture_post_wait_finger_len,
+      egismoc_exec_cmd (device, cmd_capture_post_wait_finger, G_N_ELEMENTS (cmd_capture_post_wait_finger),
                         NULL, egismoc_task_ssm_next_state_cb);
       break;
 
     case ENROLL_CAPTURE_READ_RESPONSE:
-      egismoc_exec_cmd (device, cmd_read_capture, cmd_read_capture_len,
+      egismoc_exec_cmd (device, cmd_read_capture, G_N_ELEMENTS (cmd_read_capture),
                         NULL, egismoc_read_capture_cb);
       break;
 
     case ENROLL_COMMIT_START:
-      egismoc_exec_cmd (device, cmd_commit_starting, cmd_commit_starting_len,
+      egismoc_exec_cmd (device, cmd_commit_starting, G_N_ELEMENTS (cmd_commit_starting),
                         NULL, egismoc_task_ssm_next_state_cb);
       break;
 
@@ -1395,11 +1332,11 @@ egismoc_identify_check_cb (FpDevice *device,
     }
 
   /* Check that the read payload indicates "match" */
-  if (length_in == EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + SDCP_MAC_SIZE + SDCP_ENROLLMENT_ID_SIZE + rsp_identify_match_suffix_len &&
+  if (length_in == EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + SDCP_MAC_SIZE + SDCP_ENROLLMENT_ID_SIZE + G_N_ELEMENTS (rsp_identify_match_suffix) &&
       egismoc_validate_response_suffix (buffer_in,
                                         length_in,
                                         rsp_identify_match_suffix,
-                                        rsp_identify_match_suffix_len))
+                                        G_N_ELEMENTS (rsp_identify_match_suffix)))
     {
       /*
          Normally for SDCP the "Authorized Identity" response should be (id,m)
@@ -1415,17 +1352,17 @@ egismoc_identify_check_cb (FpDevice *device,
                                         SDCP_ENROLLMENT_ID_SIZE);
     }
   /* If device was not successfully read (not a valid "not matched") */
-  else if (length_in != EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + rsp_identify_notmatch_suffix_len ||
+  else if (length_in != EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + G_N_ELEMENTS (rsp_identify_notmatch_suffix) ||
            !egismoc_validate_response_suffix (buffer_in, length_in,
                                                rsp_identify_notmatch_suffix,
-                                               rsp_identify_notmatch_suffix_len))
+                                               G_N_ELEMENTS (rsp_identify_notmatch_suffix)))
     {
       g_propagate_error (&identify_print->error,
                          fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO,
                                                    "Unrecognized response from device"));
     }
 
-  egismoc_exec_cmd (device, cmd_sensor_reset, cmd_sensor_reset_len,
+  egismoc_exec_cmd (device, cmd_sensor_reset, G_N_ELEMENTS (cmd_sensor_reset),
                     NULL, egismoc_identify_complete_cb);
 }
 
@@ -1441,7 +1378,7 @@ egismoc_identify_run_state (FpiSsm   *ssm,
     {
     case IDENTIFY_GET_ENROLLED_IDS:
       /* get enrolled_ids from device for use in check stages below */
-      egismoc_exec_cmd (device, cmd_list, cmd_list_len,
+      egismoc_exec_cmd (device, cmd_list, G_N_ELEMENTS (cmd_list),
                         NULL, egismoc_list_fill_enrolled_ids_cb);
       break;
 
@@ -1456,12 +1393,12 @@ egismoc_identify_run_state (FpiSsm   *ssm,
       break;
 
     case IDENTIFY_SENSOR_RESET:
-      egismoc_exec_cmd (device, cmd_sensor_reset, cmd_sensor_reset_len,
+      egismoc_exec_cmd (device, cmd_sensor_reset, G_N_ELEMENTS (cmd_sensor_reset),
                         NULL, egismoc_task_ssm_next_state_cb);
       break;
 
     case IDENTIFY_SENSOR_IDENTIFY:
-      egismoc_exec_cmd (device, cmd_sensor_identify, cmd_sensor_identify_len,
+      egismoc_exec_cmd (device, cmd_sensor_identify, G_N_ELEMENTS (cmd_sensor_identify),
                         NULL, egismoc_task_ssm_next_state_cb);
       break;
 
@@ -1470,7 +1407,7 @@ egismoc_identify_run_state (FpiSsm   *ssm,
       break;
 
     case IDENTIFY_SENSOR_CHECK:
-      egismoc_exec_cmd (device, cmd_sensor_check, cmd_sensor_check_len,
+      egismoc_exec_cmd (device, cmd_sensor_check, G_N_ELEMENTS (cmd_sensor_check),
                         NULL, egismoc_task_ssm_next_state_cb);
       break;
 
@@ -1532,11 +1469,11 @@ egismoc_parse_connect (const guint8  *buffer,
       buffer[EGISMOC_CONNECT_RESPONSE_PREFIX_SIZE - 1] != SDCP_RANDOM_SIZE ||
       !egismoc_validate_response_suffix (buffer, length,
                                          rsp_sdcp_connect_success_suffix,
-                                         rsp_sdcp_connect_success_suffix_len))
+                                         G_N_ELEMENTS (rsp_sdcp_connect_success_suffix)))
     return FALSE;
 
   /* Do not let a field consume the status bytes. */
-  fpi_byte_reader_init (&reader, buffer, length - rsp_sdcp_connect_success_suffix_len);
+  fpi_byte_reader_init (&reader, buffer, length - G_N_ELEMENTS (rsp_sdcp_connect_success_suffix));
   if (!fpi_byte_reader_set_pos (&reader, EGISMOC_CONNECT_RESPONSE_PREFIX_SIZE) ||
       !egismoc_read_bytes (&reader, SDCP_RANDOM_SIZE, &random) ||
       !fpi_byte_reader_get_uint16_be (&reader, &certificate_length) ||
@@ -1603,15 +1540,15 @@ egismoc_connect (FpSdcpDevice *sdcp_device)
   host_random_ptr = g_bytes_get_data (host_random, &host_random_len);
   host_public_key_ptr = g_bytes_get_data (host_public_key, &host_public_key_len);
 
-  const int length = cmd_sdcp_connect_prefix_len
+  const int length = G_N_ELEMENTS (cmd_sdcp_connect_prefix)
                      + host_random_len
                      + host_public_key_len
-                     + cmd_sdcp_connect_suffix_len;
+                     + G_N_ELEMENTS (cmd_sdcp_connect_suffix);
 
   fpi_byte_writer_init_with_size (&writer, length, TRUE);
 
   written &= fpi_byte_writer_put_data (&writer, cmd_sdcp_connect_prefix,
-                                       cmd_sdcp_connect_prefix_len);
+                                       G_N_ELEMENTS (cmd_sdcp_connect_prefix));
 
   written &= fpi_byte_writer_put_data (&writer, host_random_ptr,
                                        host_random_len);
@@ -1620,7 +1557,7 @@ egismoc_connect (FpSdcpDevice *sdcp_device)
                                        host_public_key_len);
 
   written &= fpi_byte_writer_put_data (&writer, cmd_sdcp_connect_suffix,
-                                       cmd_sdcp_connect_suffix_len);
+                                       G_N_ELEMENTS (cmd_sdcp_connect_suffix));
 
   if (!written)
     {
@@ -1671,7 +1608,7 @@ egismoc_fw_version_cb (FpDevice *device,
   if (!egismoc_validate_response_suffix (buffer_in,
                                          length_in,
                                          rsp_fw_version_suffix,
-                                         rsp_fw_version_suffix_len))
+                                         G_N_ELEMENTS (rsp_fw_version_suffix)))
     {
       fpi_ssm_mark_failed (self->task_ssm,
                            fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO,
@@ -1686,15 +1623,15 @@ egismoc_fw_version_cb (FpDevice *device,
    * come with every payload Then we will also skip the carriage return and take
    * all but the last 2 bytes as the FW Version
    */
-  prefix_length = egismoc_read_prefix_len + 2 + 3 + 1;
-  if (length_in < prefix_length + rsp_fw_version_suffix_len)
+  prefix_length = G_N_ELEMENTS (egismoc_read_prefix) + 2 + 3 + 1;
+  if (length_in < prefix_length + G_N_ELEMENTS (rsp_fw_version_suffix))
     {
       fpi_ssm_mark_failed (self->task_ssm,
                            fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
       return;
     }
   fw_version_start = buffer_in + prefix_length;
-  fw_version_length = length_in - prefix_length - rsp_fw_version_suffix_len;
+  fw_version_length = length_in - prefix_length - G_N_ELEMENTS (rsp_fw_version_suffix);
   fw_version = g_strndup ((gchar *) fw_version_start, fw_version_length);
 
   fp_info ("Device firmware version is %s", fw_version);
@@ -1751,7 +1688,7 @@ egismoc_dev_init_handler (FpiSsm   *ssm,
       break;
 
     case DEV_GET_FW_VERSION:
-      egismoc_exec_cmd (device, cmd_fw_version, cmd_fw_version_len,
+      egismoc_exec_cmd (device, cmd_fw_version, G_N_ELEMENTS (cmd_fw_version),
                         NULL, egismoc_fw_version_cb);
       return;
 

@@ -163,15 +163,35 @@ fpc_cmd_receive_cb (FpiUsbTransfer *transfer,
         {
           fpc_cmd_response_t evt_data = {0};
           fp_dbg ("%s recv evt data length: %ld", G_STRFUNC, transfer->actual_length);
-          if (transfer->actual_length == 0)
+          if (transfer->actual_length < sizeof (evt_hdr_t) ||
+              transfer->actual_length > sizeof (evt_data))
             {
-              fp_err ("%s Expect data but actual_length = 0", G_STRFUNC);
               fpi_ssm_mark_failed (transfer->ssm,
                                    fpi_device_error_new (FP_DEVICE_ERROR_DATA_INVALID));
               return;
             }
 
           memcpy (&evt_data, transfer->buffer, transfer->actual_length);
+
+          if (evt_data.evt_hdr.cmdid == FPC_EVT_INIT_RESULT &&
+              transfer->actual_length < G_STRUCT_OFFSET (evt_initiated_t, fw_capabilities) +
+              sizeof (evt_data.evt_inited.fw_capabilities))
+            {
+              fpi_ssm_mark_failed (transfer->ssm,
+                                   fpi_device_error_new (FP_DEVICE_ERROR_DATA_INVALID));
+              return;
+            }
+
+          if (evt_data.evt_hdr.cmdid == FPC_EVT_FID_DATA &&
+              (transfer->actual_length < G_STRUCT_OFFSET (evt_enum_fids_t, fid_data) ||
+               evt_data.evt_enum_fids.num_ids > FPC_TEMPLATES_MAX ||
+               transfer->actual_length - G_STRUCT_OFFSET (evt_enum_fids_t, fid_data) <
+               evt_data.evt_enum_fids.num_ids * sizeof (fpc_fid_data_t)))
+            {
+              fpi_ssm_mark_failed (transfer->ssm,
+                                   fpi_device_error_new (FP_DEVICE_ERROR_DATA_INVALID));
+              return;
+            }
 
           if (data->callback)
             data->callback (self, (guint8 *) &evt_data, NULL);
@@ -445,7 +465,8 @@ fpc_evt_cb (FpiDeviceFpcMoc *self,
               presp->evt_inited.hdr.status, presp->evt_inited.sensor,
               presp->evt_inited.hw_id, presp->evt_inited.img_w, presp->evt_inited.img_h);
 
-      fp_dbg ("%s INIT: FW version: %s", G_STRFUNC, (gchar *) presp->evt_inited.fw_version);
+      fp_dbg ("%s INIT: FW version: %.*s", G_STRFUNC,
+              (int) sizeof (presp->evt_inited.fw_version), (gchar *) presp->evt_inited.fw_version);
       break;
 
     case FPC_EVT_FINGER_DWN:
@@ -573,6 +594,9 @@ fpc_print_from_data (FpiDeviceFpcMoc *self, fpc_fid_data_t *fid_data)
   GVariant *uid;
   g_autofree gchar *userid = NULL;
 
+  if (fid_data->identity_size > sizeof (fid_data->identity))
+    return NULL;
+
   userid = g_strndup ((gchar *) fid_data->identity, fid_data->identity_size);
   print = fp_print_new (FP_DEVICE (self));
 
@@ -663,6 +687,12 @@ fpc_template_list_cb (FpiDeviceFpcMoc *self,
         }
 
       print = fpc_print_from_data (self, fid_data);
+      if (!print)
+        {
+          fpi_device_list_complete (device, NULL,
+                                    fpi_device_error_new (FP_DEVICE_ERROR_DATA_INVALID));
+          return;
+        }
 
       g_ptr_array_add (list_result, g_object_ref_sink (print));
     }
@@ -1231,6 +1261,12 @@ fpc_verify_cb (FpiDeviceFpcMoc *self,
               fid_data.identity_size);
 
       match = fpc_print_from_data (self, &fid_data);
+      if (!match)
+        {
+          fpi_ssm_mark_failed (self->task_ssm,
+                               fpi_device_error_new (FP_DEVICE_ERROR_DATA_INVALID));
+          return;
+        }
 
       if (current_action == FPI_DEVICE_ACTION_VERIFY)
         {

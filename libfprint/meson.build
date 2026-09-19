@@ -159,6 +159,7 @@ driver_sources = {
 }
 
 helper_sources = {
+    'pixman' : [],
     'aeslib' :
         [ 'drivers/aeslib.c' ],
     'aesx660' :

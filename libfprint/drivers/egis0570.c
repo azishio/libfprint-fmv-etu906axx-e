@@ -165,6 +165,13 @@ data_resp_cb (FpiUsbTransfer *transfer, FpDevice *dev, gpointer user_data, GErro
             {
               if (where_finger_is & (1 << k))
                 {
+                  /* anti-overengineering: 1 MiB per swipe; revise with longer capture evidence. */
+                  if (self->strips_len >= 1024 * 1024 /
+                      (EGIS0570_IMGWIDTH * EGIS0570_RFMGHEIGHT + sizeof (struct fpi_frame)))
+                    {
+                      fpi_ssm_mark_failed (transfer->ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+                      return;
+                    }
                   struct fpi_frame *stripe = g_malloc (EGIS0570_IMGWIDTH * EGIS0570_RFMGHEIGHT + sizeof (struct fpi_frame));
                   stripe->delta_x = 0;
                   stripe->delta_y = 0;

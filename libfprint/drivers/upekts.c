@@ -242,10 +242,18 @@ __handle_incoming_msg (FpDevice             *device,
   guint16 msg_crc;
   unsigned char code_a, code_b;
 
-  g_assert (udata->buflen >= 6);
+  if (udata->buflen < 7)
+    {
+      error = fpi_device_error_new (FP_DEVICE_ERROR_PROTO);
+      goto err;
+    }
   len = ((buf[5] & 0xf) << 8) | buf[6];
 
-  g_assert (udata->buflen >= len + 9);
+  if (udata->buflen < len + 9)
+    {
+      error = fpi_device_error_new (FP_DEVICE_ERROR_PROTO);
+      goto err;
+    }
   computed_crc = udf_crc (buf + 4, len + 3);
   msg_crc = (buf[len + 8] << 8) | buf[len + 7];
 
@@ -308,6 +316,12 @@ __handle_incoming_msg (FpDevice             *device,
         fp_dbg ("non-zero bytes in cmd response");
 
       innerlen = innerbuf[1] | (innerbuf[2] << 8);
+      if (innerlen < 3 || innerlen - 3 > len - 6)
+        {
+          error = fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO,
+                                            "Invalid inner response length");
+          goto err;
+        }
       innerlen = innerlen - 3;
       _subcmd = innerbuf[5];
       fp_dbg ("device responds to subcmd %x with %d bytes", _subcmd, innerlen);

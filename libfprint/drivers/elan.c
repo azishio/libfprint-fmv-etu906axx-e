@@ -251,14 +251,14 @@ elan_process_frame_linear (unsigned short *raw_frame,
         max = raw_frame[i];
     }
 
-  g_assert (max != min);
+  /* A flat frame carries no contrast; retain a bounded, blank image. */
 
   unsigned short px;
 
   for (int i = 0; i < frame_size; i++)
     {
       px = raw_frame[i];
-      px = (px - min) * 0xff / (max - min);
+      px = max == min ? 0 : (px - min) * 0xff / (max - min);
       frame->data[i] = (unsigned char) px;
     }
 
@@ -297,7 +297,7 @@ elan_process_frame_thirds (unsigned short *raw_frame,
       else if (lvl1 <= px && px < lvl2)
         px = 99 + ((px - lvl1) * 56 / (lvl2 - lvl1));
       else                      // (lvl2 <= px && px <= lvl3)
-        px = 155 + ((px - lvl2) * 100 / (lvl3 - lvl2));
+        px = lvl3 == lvl2 ? 255 : 155 + ((px - lvl2) * 100 / (lvl3 - lvl2));
       frame->data[i] = (unsigned char) px;
     }
 
@@ -837,6 +837,11 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
       break;
 
     case ACTIVATE_SET_SENSOR_DIM:
+      if (!self->last_read[0] || !self->last_read[2])
+        {
+          fpi_ssm_mark_failed (ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+          return;
+        }
       /* see elan_save_frame for details */
       if (self->dev_type & ELAN_NOT_ROTATED)
         {

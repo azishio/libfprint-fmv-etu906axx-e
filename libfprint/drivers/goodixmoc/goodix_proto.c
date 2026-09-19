@@ -253,6 +253,9 @@ gx_proto_parse_header (FpiByteReader *reader,
   if (!fpi_byte_reader_get_uint8 (reader, &pheader->rev_crc8))
     g_return_val_if_reached (-1);
 
+  if (pheader->len < PACKAGE_CRC_SIZE)
+    return -1;
+
   pheader->len -= PACKAGE_CRC_SIZE;
 
   return 0;
@@ -292,6 +295,9 @@ gx_proto_parse_fingerid (FpiByteReader     *reader,
 
   if (!fpi_byte_reader_get_uint8 (reader, &template->payload.size))
     g_return_val_if_reached (-1);
+
+  if (template->payload.size > sizeof (template->payload.data))
+    return -1;
 
   if (!fpi_byte_reader_get_data (reader, template->payload.size, &buffer))
     g_return_val_if_reached (-1);
@@ -412,6 +418,10 @@ gx_proto_parse_body (uint16_t cmd, FpiByteReader *byte_reader, pgxfp_cmd_respons
       if (!fpi_byte_reader_get_uint8 (byte_reader,
                                       &presp->finger_list_resp.finger_num))
         g_return_val_if_reached (-1);
+
+      if (presp->finger_list_resp.finger_num >
+          G_N_ELEMENTS (presp->finger_list_resp.finger_list))
+        return -1;
 
       for(uint8_t num = 0; num < presp->finger_list_resp.finger_num; num++)
         {
