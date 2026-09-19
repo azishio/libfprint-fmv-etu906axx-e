@@ -338,6 +338,33 @@ out:
   return details ? details : g_strdup ("certificate details unavailable");
 }
 
+/* An administrator may allow expiry for one exact model certificate. Other
+ * validation failures, including expired issuers, retain OpenSSL's result. */
+static int
+fpi_sdcp_verify_certificate_cb (int preverify_ok, X509_STORE_CTX *ctx)
+{
+  const gchar *pin = g_getenv ("LIBFPRINT_SDCP_EXPIRED_MODEL_SHA256");
+  X509 *cert = X509_STORE_CTX_get_current_cert (ctx); /* borrowed */
+  guint8 digest[EVP_MAX_MD_SIZE];
+  unsigned int length = 0;
+
+  if (preverify_ok || X509_STORE_CTX_get_error (ctx) != X509_V_ERR_CERT_HAS_EXPIRED ||
+      X509_STORE_CTX_get_error_depth (ctx) != 0 || !cert || !pin || strlen (pin) != 64)
+    return preverify_ok;
+
+  if (X509_digest (cert, EVP_sha256 (), digest, &length) != 1 || length != 32)
+    return 0;
+
+  for (guint i = 0; i < length; i++)
+    if (g_ascii_xdigit_value (pin[2 * i]) != (digest[i] >> 4) ||
+        g_ascii_xdigit_value (pin[2 * i + 1]) != (digest[i] & 0x0f))
+      return 0;
+
+  fp_info ("Allowing expired SDCP model certificate explicitly pinned by administrator");
+  X509_STORE_CTX_set_error (ctx, X509_V_OK);
+  return 1;
+}
+
 static gboolean
 fpi_sdcp_verify_certificate (X509    *certificate,
                              GError **error)
@@ -385,6 +412,7 @@ fpi_sdcp_verify_certificate (X509    *certificate,
   /* Each verification owns its store and policy. */
   X509_STORE_CTX_set0_param (ctx, g_steal_pointer (&param));
 
+  X509_STORE_CTX_set_verify_cb (ctx, fpi_sdcp_verify_certificate_cb);
   if (X509_verify_cert (ctx) != 1)
     goto out_verify_error;
 

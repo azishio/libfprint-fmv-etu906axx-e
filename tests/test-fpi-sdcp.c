@@ -429,6 +429,66 @@ test_verify_connect_rejects_expired_certificate (void)
   fpi_sdcp_claim_free (claim);
 }
 
+static void
+test_expired_certificate_pin (void)
+{
+  g_autoptr(FpiSdcpClaim) claim = get_fake_sdcp_claim ();
+  g_autofree gchar *pin = g_compute_checksum_for_bytes (G_CHECKSUM_SHA256,
+                                                        claim->model_certificate);
+  const guint8 *der = g_bytes_get_data (claim->model_certificate, NULL);
+  X509 *cert = d2i_X509 (NULL, &der, g_bytes_get_size (claim->model_certificate));
+  g_autoptr(GError) error = NULL;
+
+  g_assert_nonnull (cert);
+  fpi_sdcp_test_set_verification_time (1789776000);
+  const gchar *invalid_pins[] = {NULL, "", "1", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+                                 "0000000000000000000000000000000000000000000000000000000000000000"};
+  for (guint i = 0; i < G_N_ELEMENTS (invalid_pins); i++)
+    {
+      if (invalid_pins[i])
+        g_setenv ("LIBFPRINT_SDCP_EXPIRED_MODEL_SHA256", invalid_pins[i], TRUE);
+      else
+        g_unsetenv ("LIBFPRINT_SDCP_EXPIRED_MODEL_SHA256");
+      g_assert_false (fpi_sdcp_verify_certificate (cert, &error));
+      g_assert_nonnull (strstr (error->message, "certificate has expired"));
+      g_clear_error (&error);
+    }
+
+  g_setenv ("LIBFPRINT_SDCP_EXPIRED_MODEL_SHA256", pin, TRUE);
+  g_assert_true (fpi_sdcp_verify_certificate (cert, &error));
+  g_assert_no_error (error);
+
+  /* The same pin cannot waive not-yet-valid dates or expired CA certificates. */
+  fpi_sdcp_test_set_verification_time (1577836800); /* 2020 */
+  g_assert_false (fpi_sdcp_verify_certificate (cert, &error));
+  g_assert_nonnull (error);
+  g_clear_error (&error);
+  fpi_sdcp_test_set_verification_time (2303683200); /* 2043 */
+  g_assert_false (fpi_sdcp_verify_certificate (cert, &error));
+  g_assert_nonnull (error);
+  g_clear_error (&error);
+
+  /* Even pinning the modified certificate cannot waive its broken signature. */
+  fpi_sdcp_test_set_verification_time (1789776000);
+  g_autoptr(GBytes) modified = NULL;
+  guint8 *bytes = g_memdup2 (g_bytes_get_data (claim->model_certificate, NULL),
+                            g_bytes_get_size (claim->model_certificate));
+  bytes[g_bytes_get_size (claim->model_certificate) - 1] ^= 1;
+  modified = g_bytes_new_take (bytes, g_bytes_get_size (claim->model_certificate));
+  g_free (pin);
+  pin = g_compute_checksum_for_bytes (G_CHECKSUM_SHA256, modified);
+  g_setenv ("LIBFPRINT_SDCP_EXPIRED_MODEL_SHA256", pin, TRUE);
+  der = g_bytes_get_data (modified, NULL);
+  X509_free (cert);
+  cert = d2i_X509 (NULL, &der, g_bytes_get_size (modified));
+  g_assert_nonnull (cert);
+  g_assert_false (fpi_sdcp_verify_certificate (cert, &error));
+  g_assert_nonnull (error);
+  X509_free (cert);
+  g_unsetenv ("LIBFPRINT_SDCP_EXPIRED_MODEL_SHA256");
+  fpi_sdcp_test_set_verification_time (0);
+}
+
 /* Generate an independent signer and a test-only trust anchor. None of these
  * keys or certificates is embedded in the production truststore. */
 static X509 *
@@ -496,7 +556,7 @@ sign_test_message (EVP_PKEY *key, const guint8 *prefix, gsize prefix_length,
 }
 
 static void
-test_authenticated_connect (void)
+test_authenticated_connect (gconstpointer data)
 {
   EVP_PKEY *model_key = EVP_EC_gen ("P-256");
   EVP_PKEY *device_key = EVP_EC_gen ("P-256");
@@ -523,9 +583,13 @@ test_authenticated_connect (void)
   good_claim->device_signature = sign_test_message (device_key, prefix, sizeof (prefix),
                                                     good_claim->firmware_hash, good_claim->firmware_public_key);
   test_trust_anchor = certificate;
-  fpi_sdcp_test_set_verification_time (1672531200);
+  g_autofree gchar *pin = g_compute_checksum_for_bytes (G_CHECKSUM_SHA256,
+                                                        good_claim->model_certificate);
+  if (GPOINTER_TO_INT (data))
+    g_setenv ("LIBFPRINT_SDCP_EXPIRED_MODEL_SHA256", pin, TRUE);
+  fpi_sdcp_test_set_verification_time (GPOINTER_TO_INT (data) ? 2240611200 : 1672531200);
 
-  for (guint mutation = 0; mutation < 9; mutation++)
+  for (guint mutation = 0; mutation < 10; mutation++)
     {
       g_autoptr(FpiSdcpClaim) claim = fpi_sdcp_claim_copy (good_claim);
       g_autoptr(GBytes) hash = NULL;
@@ -572,6 +636,12 @@ test_authenticated_connect (void)
       g_assert_no_error (error);
       mac = fpi_sdcp_mac (secret, "connect", hash, NULL, &error);
       g_assert_no_error (error);
+      if (mutation == 9)
+        {
+          GBytes *bad_mac = g_bytes_with_first_byte_flipped (mac);
+          g_bytes_unref (mac);
+          mac = bad_mac;
+        }
       accepted = fpi_sdcp_verify_connect (host_private_key, host_random, device_random,
                                            claim, mac, mutation != 8, TRUE, &result, &error);
       g_assert_cmpint (accepted, ==, mutation == 0);
@@ -589,6 +659,7 @@ test_authenticated_connect (void)
         }
     }
   test_trust_anchor = NULL;
+  g_unsetenv ("LIBFPRINT_SDCP_EXPIRED_MODEL_SHA256");
   fpi_sdcp_test_set_verification_time (0);
   X509_free (certificate);
   EVP_PKEY_free (device_key);
@@ -631,7 +702,10 @@ main (int argc, char *argv[])
 {
   g_test_init (&argc, &argv, NULL);
 
-  g_test_add_func ("/sdcp/authenticated_connect", test_authenticated_connect);
+  g_unsetenv ("LIBFPRINT_SDCP_EXPIRED_MODEL_SHA256");
+  g_test_add_data_func ("/sdcp/authenticated_connect", GINT_TO_POINTER (0), test_authenticated_connect);
+  g_test_add_data_func ("/sdcp/authenticated_connect_expired_pin", GINT_TO_POINTER (1), test_authenticated_connect);
+  g_test_add_func ("/sdcp/expired_certificate_pin", test_expired_certificate_pin);
   g_test_add_func ("/sdcp/generate_host_key", test_generate_host_key);
   g_test_add_func ("/sdcp/generate_random", test_generate_random);
   g_test_add_func ("/sdcp/verify_connect", test_verify_connect);

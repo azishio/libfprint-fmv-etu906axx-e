@@ -3,6 +3,47 @@
 > limitations. Hardware acceptance is not complete; CI success does not certify
 > login or unlock support.
 
+> [!WARNING]
+> **Expired-certificate exception (v0.1.2+): disabled by default.**
+> Setting `LIBFPRINT_SDCP_EXPIRED_MODEL_SHA256` explicitly accepts the expiry of
+> the model certificate with that exact SHA-256 fingerprint. This weakens the
+> normal certificate validity policy and is a temporary compatibility option,
+> not a certificate renewal or proof that the device is safe. Model certificates
+> can be shared by multiple sensors; this does not identify a unique physical device.
+> Certificate-chain trust, certificate signatures, SDCP attestation signatures
+> and MAC checks remain enabled. Expired issuers and other validation errors
+> are still rejected. Hardware login/unlock acceptance is not complete.
+
+### Enable the expired-model exception for the investigated LIFEBOOK sensor
+
+Install v0.1.2 or later first. The fingerprint below was read from this sensor;
+only use it if your diagnostic output has the same SHA-256 value. Configure
+fprintd's service environment (setting a variable in the client shell is not enough):
+
+```sh
+sudo install -d -m 0755 /etc/systemd/system/fprintd.service.d
+sudo tee /etc/systemd/system/fprintd.service.d/etu906-expired-model.conf >/dev/null <<'EOF'
+[Service]
+Environment=LIBFPRINT_SDCP_EXPIRED_MODEL_SHA256=288c1e9ac8282125597fde1f077d613739ebd4f5d69d0dd8a31bffa338f12833
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart fprintd.service
+fprintd-enroll -f right-index-finger "$USER"
+fprintd-verify -f right-index-finger "$USER"
+```
+
+Restarting fprintd interrupts any active fingerprint operation. Keep password
+login available. To restore strict expiry checking, remove only this override:
+
+```sh
+sudo rm /etc/systemd/system/fprintd.service.d/etu906-expired-model.conf
+sudo systemctl daemon-reload
+sudo systemctl restart fprintd.service
+```
+
+The package does not create or remove this administrator-owned override.
+Remove it when no longer needed, including when uninstalling the private driver.
+
 <div align="center">
 
 # LibFPrint
