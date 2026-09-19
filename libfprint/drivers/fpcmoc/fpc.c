@@ -673,7 +673,7 @@ fpc_template_list_cb (FpiDeviceFpcMoc *self,
       return;
     }
 
-  for (int n = 0; n < presp->evt_enum_fids.num_ids; n++)
+  for (guint32 n = 0; n < presp->evt_enum_fids.num_ids; n++)
     {
       FpPrint *print = NULL;
       fpc_fid_data_t *fid_data = &presp->evt_enum_fids.fid_data[n];

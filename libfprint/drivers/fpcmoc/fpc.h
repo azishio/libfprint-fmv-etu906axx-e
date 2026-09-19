@@ -145,7 +145,7 @@ typedef struct
 typedef struct
 {
   evt_hdr_t      hdr;
-  gint           status;
+  gint32         status;
   guint32        num_ids;
   fpc_fid_data_t fid_data[FPC_TEMPLATES_MAX];
 } __attribute__((packed)) evt_enum_fids_t;

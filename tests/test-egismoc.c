@@ -292,7 +292,7 @@ test_empty_clear_completes (void)
 }
 
 static void
-test_transport_result (FpDevice *device, guchar *buffer, gsize length, GError *error)
+test_transport_result (FpDevice *device, const guint8 *buffer, gsize length, GError *error)
 {
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
   guint count = GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (device), "completions"));

@@ -120,7 +120,7 @@ m_loop_state (FpiSsm *ssm, FpDevice *_dev)
 
     case M_READ_PRINT_POLL:
       {
-        int rv = vfs301_proto_process_event_poll (self);
+        const Vfs301ScanState rv = vfs301_proto_process_event_poll (self);
         if (rv == VFS301_FAILURE)
           {
             fpi_ssm_mark_failed (ssm, fpi_device_error_new (FP_DEVICE_ERROR_PROTO));

@@ -286,26 +286,26 @@ vfs301_proto_generate (int type, int subtype, gssize *len)
 /************************** SCAN IMAGE PROCESSING *****************************/
 
 #ifdef SCAN_FINISH_DETECTION
-static int
-img_is_finished_scan (fp_line_t *lines, int no_lines)
+static gboolean
+img_is_finished_scan (const vfs301_line_t *lines, int no_lines)
 {
   int i;
   int j;
-  int rv = 1;
+  gboolean rv = TRUE;
 
   for (i = no_lines - VFS301_FP_SUM_LINES; i < no_lines; i++)
     {
       /* check the line for fingerprint data */
       for (j = 0; j < sizeof (lines[i].sum2); j++)
         if (lines[i].sum2[j] > (VFS301_FP_SUM_MEDIAN + VFS301_FP_SUM_EMPTY_RANGE))
-          rv = 0;
+          rv = FALSE;
     }
 
   return rv;
 }
 #endif
 
-static int
+static gboolean
 scanline_diff (const guint8 *scanlines, int prev, int cur)
 {
   const guint8 *line1 = scanlines + prev * VFS301_FP_OUTPUT_WIDTH;
@@ -371,10 +371,10 @@ vfs301_extract_image (FpDeviceVfs301 *vfs, guint8 *output, int *output_height
     }
 }
 
-static int
-img_process_data (int first_block, FpDeviceVfs301 *dev, const guint8 *buf, int len)
+static Vfs301ScanState
+img_process_data (gboolean first_block, FpDeviceVfs301 *dev, const guint8 *buf, int len)
 {
-  vfs301_line_t *lines = (vfs301_line_t *) buf;
+  const vfs301_line_t *lines = (const vfs301_line_t *) buf;
   int no_lines = len / sizeof (vfs301_line_t);
   int i;
   /*int no_nonempty;*/
@@ -382,13 +382,13 @@ img_process_data (int first_block, FpDeviceVfs301 *dev, const guint8 *buf, int l
   int last_img_height;
 
 #ifdef SCAN_FINISH_DETECTION
-  int finished_scan;
+  gboolean finished_scan;
 #endif
 
   /* anti-overengineering: 1 MiB per swipe; revise with longer capture evidence. */
   if (no_lines > 1024 * 1024 / VFS301_FP_OUTPUT_WIDTH -
       (first_block ? 0 : dev->scanline_count))
-    return -1;
+    return VFS301_FAILURE;
 
   if (first_block)
     {
@@ -418,9 +418,9 @@ img_process_data (int first_block, FpDeviceVfs301 *dev, const guint8 *buf, int l
 #ifdef SCAN_FINISH_DETECTION
   finished_scan = img_is_finished_scan (lines, no_lines);
 
-  return !finished_scan;
+  return finished_scan ? VFS301_ENDED : VFS301_ONGOING;
 #else /* SCAN_FINISH_DETECTION */
-  return 1;       /* Just continue until data is coming */
+  return VFS301_ONGOING;
 #endif
 }
 
@@ -441,8 +441,8 @@ img_process_data (int first_block, FpDeviceVfs301 *dev, const guint8 *buf, int l
 
 #define IS_VFS301_FP_SEQ_START(b) ((b[0] == 0x01) && (b[1] == 0xfe))
 
-static int
-vfs301_proto_process_data (FpDeviceVfs301 *dev, int first_block, const guint8 *buf, gint len)
+static Vfs301ScanState
+vfs301_proto_process_data (FpDeviceVfs301 *dev, gboolean first_block, const guint8 *buf, gint len)
 {
   int i;
 
@@ -466,7 +466,7 @@ vfs301_proto_request_fingerprint (FpDeviceVfs301 *dev)
   USB_RECV (VFS301_RECEIVE_ENDPOINT_CTRL, 2);      /* 000000000000 */
 }
 
-int
+gboolean
 vfs301_proto_peek_event (FpDeviceVfs301 *dev)
 {
   g_autoptr(GError) error = NULL;
@@ -482,9 +482,9 @@ vfs301_proto_peek_event (FpDeviceVfs301 *dev)
   g_assert (!error);
 
   if (memcmp (transfer->buffer, no_event, sizeof (no_event)) == 0)
-    return 0;
+    return FALSE;
   else if (memcmp (transfer->buffer, got_event, sizeof (no_event)) == 0)
-    return 1;
+    return TRUE;
   else
     g_assert_not_reached ();
 }
@@ -525,20 +525,12 @@ vfs301_proto_process_event_cb (FpiUsbTransfer *transfer,
   else
     {
       FpiUsbTransfer *new;
-      int result = vfs301_proto_process_data (self,
-                                              transfer->length == VFS301_FP_RECV_LEN_1,
-                                              transfer->buffer,
-                                              transfer->actual_length);
-      if (result < 0)
-        {
-          self->recv_progress = VFS301_FAILURE;
-          return;
-        }
-      if (!result)
-        {
-          self->recv_progress = VFS301_ENDED;
-          return;
-        }
+      self->recv_progress = vfs301_proto_process_data (self,
+                                                       transfer->length == VFS301_FP_RECV_LEN_1,
+                                                       transfer->buffer,
+                                                       transfer->actual_length);
+      if (self->recv_progress != VFS301_ONGOING)
+        return;
 
       new = fpi_usb_transfer_new (device);
 
@@ -586,7 +578,7 @@ vfs301_proto_process_event_start (FpDeviceVfs301 *dev)
                            vfs301_proto_process_event_cb, NULL);
 }
 
-int
+Vfs301ScanState
 vfs301_proto_process_event_poll (FpDeviceVfs301 *dev)
 {
   if (dev->recv_progress != VFS301_ENDED)

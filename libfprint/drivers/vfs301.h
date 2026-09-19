@@ -35,6 +35,12 @@ enum {
 #define VFS301_FP_RECV_LEN_1 (84032)
 #define VFS301_FP_RECV_LEN_2 (84096)
 
+typedef enum {
+  VFS301_ONGOING = 0,
+  VFS301_ENDED = 1,
+  VFS301_FAILURE = -1
+} Vfs301ScanState;
+
 struct _FpDeviceVfs301
 {
   FpImageDevice parent;
@@ -43,11 +49,7 @@ struct _FpDeviceVfs301
   unsigned char *scanline_buf;
   int            scanline_count;
 
-  enum {
-    VFS301_ONGOING = 0,
-    VFS301_ENDED = 1,
-    VFS301_FAILURE = -1
-  } recv_progress;
+  Vfs301ScanState recv_progress;
   int recv_exp_amt;
 };
 
@@ -133,9 +135,9 @@ void vfs301_proto_deinit (FpDeviceVfs301 *dev);
 void vfs301_proto_request_fingerprint (FpDeviceVfs301 *dev);
 
 /** returns 0 if no event is ready, or 1 if there is one... */
-int vfs301_proto_peek_event (FpDeviceVfs301 *dev);
+gboolean vfs301_proto_peek_event (FpDeviceVfs301 *dev);
 void vfs301_proto_process_event_start (FpDeviceVfs301 *dev);
-int vfs301_proto_process_event_poll (FpDeviceVfs301 *dev);
+Vfs301ScanState vfs301_proto_process_event_poll (FpDeviceVfs301 *dev);
 
 void vfs301_extract_image (FpDeviceVfs301 *vfs,
                            unsigned char  *output,

@@ -286,9 +286,9 @@ static void check_bounds (void)
 {
   FpDeviceVfs301 device = {0};
   vfs301_line_t line = {0};
-  g_assert_cmpint (img_process_data (TRUE, &device, (guint8 *) &line, sizeof line), ==, 1);
+  g_assert_cmpint (img_process_data (TRUE, &device, (const guint8 *) &line, sizeof line), ==, VFS301_ONGOING);
   device.scanline_count = 1024 * 1024 / VFS301_FP_OUTPUT_WIDTH;
-  g_assert_cmpint (img_process_data (FALSE, &device, (guint8 *) &line, sizeof line), ==, -1);
+  g_assert_cmpint (img_process_data (FALSE, &device, (const guint8 *) &line, sizeof line), ==, VFS301_FAILURE);
   g_free (device.scanline_buf);
 
   g_autoptr(FpDevice) object = g_object_new (fpi_device_vfs301_get_type (), NULL);
@@ -302,9 +302,14 @@ static void check_bounds (void)
   FpiSsm *ssm = pending (object, M_READ_PRINT_POLL);
   m_loop_state (ssm, object);
   g_assert_cmpuint (completions, ==, 1);
+  transfer.actual_length = 0;
+  vfs301_proto_process_event_cb (&transfer, object, NULL, NULL);
+  g_assert_cmpint (self->recv_progress, ==, VFS301_ENDED);
 }
 #elif defined(TEST_FPCMOC)
 #include "../libfprint/drivers/fpcmoc/fpc.c"
+G_STATIC_ASSERT (G_STRUCT_OFFSET (evt_enum_fids_t, fid_data) == 20);
+G_STATIC_ASSERT (sizeof (fpc_fid_data_t) == 77);
 static void check_bounds (void)
 {
   fpc_fid_data_t data = { .identity_size = SECURITY_MAX_SID_SIZE + 1 };

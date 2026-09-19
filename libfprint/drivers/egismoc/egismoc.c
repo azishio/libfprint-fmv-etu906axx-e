@@ -60,10 +60,10 @@ static const FpIdEntry egismoc_id_table[] = {
   { .vid = 0,      .pid = 0,      .driver_data = 0 }
 };
 
-typedef void (*SynCmdMsgCallback) (FpDevice *device,
-                                   guchar   *buffer_in,
-                                   gsize     length_in,
-                                   GError   *error);
+typedef void (*SynCmdMsgCallback) (FpDevice     *device,
+                                   const guint8 *buffer_in,
+                                   gsize         length_in,
+                                   GError       *error);
 
 typedef struct egismoc_command_data
 {
@@ -135,10 +135,10 @@ egismoc_task_ssm_done (FpiSsm   *ssm,
 }
 
 static void
-egismoc_task_ssm_next_state_cb (FpDevice *device,
-                                guchar   *buffer_in,
-                                gsize     length_in,
-                                GError   *error)
+egismoc_task_ssm_next_state_cb (FpDevice     *device,
+                                const guint8 *buffer_in,
+                                gsize         length_in,
+                                GError       *error)
 {
   fp_dbg ("Task SSM next state callback");
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
@@ -281,7 +281,7 @@ static guint16
 egismoc_get_check_bytes (FpiByteReader *reader)
 {
   fp_dbg ("Get check bytes");
-  size_t sum_values = 0;
+  guint32 sum_values = 0;
   guint16 val;
 
   fpi_byte_reader_set_pos (reader, 0);
@@ -294,16 +294,14 @@ egismoc_get_check_bytes (FpiByteReader *reader)
 
 static void
 egismoc_exec_cmd (FpDevice         *device,
-                  guchar           *cmd,
+                  const guint8     *cmd,
                   const gsize       cmd_length,
-                  GDestroyNotify    cmd_destroy,
                   SynCmdMsgCallback callback)
 {
   g_auto(FpiByteWriter) writer = {0};
   g_autoptr(FpiUsbTransfer) transfer = NULL;
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
   g_autofree CommandData *data = NULL;
-  gsize buffer_out_length = 0;
   gboolean written = TRUE;
   guint16 check_value;
 
@@ -317,9 +315,9 @@ egismoc_exec_cmd (FpDevice         *device,
    * egismoc_get_check_bytes() method and payload is what is passed via the cmd
    * parameter
    */
-  buffer_out_length = G_N_ELEMENTS (egismoc_write_prefix)
-                      + EGISMOC_CHECK_BYTES_LENGTH
-                      + cmd_length;
+  const gsize buffer_out_length = G_N_ELEMENTS (egismoc_write_prefix)
+                                  + EGISMOC_CHECK_BYTES_LENGTH
+                                  + cmd_length;
 
   fpi_byte_writer_init_with_size (&writer, buffer_out_length +
                                   (buffer_out_length % 2 ? 1 : 0), TRUE);
@@ -332,7 +330,7 @@ egismoc_exec_cmd (FpDevice         *device,
    * the real ones */
   written &= fpi_byte_writer_change_pos (&writer, EGISMOC_CHECK_BYTES_LENGTH);
 
-  /* Command Payload */
+  /* Copy the borrowed payload before starting the asynchronous transfer. */
   written &= fpi_byte_writer_put_data (&writer, cmd, cmd_length);
 
   /* Now fetch and set the "real" check bytes based on the currently
@@ -340,10 +338,6 @@ egismoc_exec_cmd (FpDevice         *device,
   check_value = egismoc_get_check_bytes (FPI_BYTE_READER (&writer));
   fpi_byte_writer_set_pos (&writer, G_N_ELEMENTS (egismoc_write_prefix));
   written &= fpi_byte_writer_put_uint16_be (&writer, check_value);
-
-  /* destroy cmd if requested */
-  if (cmd_destroy)
-    g_clear_pointer (&cmd, cmd_destroy);
 
   g_assert (self->cmd_ssm == NULL);
   self->cmd_ssm = fpi_ssm_new (device,
@@ -502,10 +496,10 @@ egismoc_wait_finger_on_sensor (FpDevice *device)
 }
 
 static void
-egismoc_list_fill_enrolled_ids_cb (FpDevice *device,
-                                   guchar   *buffer_in,
-                                   gsize     length_in,
-                                   GError   *error)
+egismoc_list_fill_enrolled_ids_cb (FpDevice     *device,
+                                   const guint8 *buffer_in,
+                                   gsize         length_in,
+                                   GError       *error)
 {
   fp_dbg ("List callback");
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
@@ -581,13 +575,13 @@ egismoc_list_run_state (FpiSsm   *ssm,
   switch (fpi_ssm_get_cur_state (ssm))
     {
     case LIST_GET_ENROLLED_IDS:
-      egismoc_exec_cmd (device, cmd_list, G_N_ELEMENTS (cmd_list), NULL,
+      egismoc_exec_cmd (device, cmd_list, G_N_ELEMENTS (cmd_list),
                         egismoc_list_fill_enrolled_ids_cb);
       break;
 
     case LIST_RETURN_ENROLLED_PRINTS:
       ids = g_ptr_array_new_with_free_func ((GDestroyNotify) g_bytes_unref);
-      for (gint i = 0; i < self->enrolled_ids->len; i++)
+      for (guint i = 0; i < self->enrolled_ids->len; i++)
         {
           GBytes *id = g_bytes_new (g_ptr_array_index (self->enrolled_ids, i),
                                     SDCP_ENROLLMENT_ID_SIZE);
@@ -638,7 +632,7 @@ egismoc_get_delete_cmd (FpDevice *device,
    *    identifiers (enrolled_list)
    */
 
-  int num_to_delete = 0;
+  guint num_to_delete = 0;
   if (delete_print)
     num_to_delete = 1;
   else if (self->enrolled_ids)
@@ -704,10 +698,10 @@ egismoc_get_delete_cmd (FpDevice *device,
 }
 
 static void
-egismoc_delete_cb (FpDevice *device,
-                   guchar   *buffer_in,
-                   gsize     length_in,
-                   GError   *error)
+egismoc_delete_cb (FpDevice     *device,
+                   const guint8 *buffer_in,
+                   gsize         length_in,
+                   GError       *error)
 {
   fp_dbg ("Delete callback");
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
@@ -761,7 +755,7 @@ egismoc_delete_run_state (FpiSsm   *ssm,
     {
     case DELETE_GET_ENROLLED_IDS:
       /* get enrolled_ids from device for use building delete payload below */
-      egismoc_exec_cmd (device, cmd_list, G_N_ELEMENTS (cmd_list), NULL,
+      egismoc_exec_cmd (device, cmd_list, G_N_ELEMENTS (cmd_list),
                         egismoc_list_fill_enrolled_ids_cb);
       break;
 
@@ -786,8 +780,8 @@ egismoc_delete_run_state (FpiSsm   *ssm,
       if (!payload)
         return;
 
-      egismoc_exec_cmd (device, g_steal_pointer (&payload), payload_length,
-                        g_free, egismoc_delete_cb);
+      egismoc_exec_cmd (device, payload, payload_length,
+                        egismoc_delete_cb);
       break;
     }
 }
@@ -824,10 +818,10 @@ egismoc_delete (FpDevice *device)
 }
 
 static void
-egismoc_enroll_commit_complete_cb (FpDevice *device,
-                                   guchar   *buffer_in,
-                                   gsize     length_in,
-                                   GError   *error)
+egismoc_enroll_commit_complete_cb (FpDevice     *device,
+                                   const guint8 *buffer_in,
+                                   gsize         length_in,
+                                   GError       *error)
 {
   fp_dbg ("Enroll commit complete callback");
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
@@ -844,10 +838,10 @@ egismoc_enroll_commit_complete_cb (FpDevice *device,
 }
 
 static void
-egismoc_enroll_commit_cb (FpDevice *device,
-                          guchar   *buffer_in,
-                          gsize     length_in,
-                          GError   *error)
+egismoc_enroll_commit_cb (FpDevice     *device,
+                          const guint8 *buffer_in,
+                          gsize         length_in,
+                          GError       *error)
 {
   fp_dbg ("Enroll commit callback");
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
@@ -872,7 +866,7 @@ egismoc_enroll_commit_cb (FpDevice *device,
     }
 
   egismoc_exec_cmd (device, cmd_sensor_reset, G_N_ELEMENTS (cmd_sensor_reset),
-                    NULL, egismoc_enroll_commit_complete_cb);
+                    egismoc_enroll_commit_complete_cb);
 }
 
 static void
@@ -882,6 +876,7 @@ egismoc_enroll_commit (FpSdcpDevice *sdcp_device,
   fp_dbg ("Enroll commit");
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (sdcp_device);
   g_auto(FpiByteWriter) writer = {0};
+  g_autofree guint8 *payload = NULL;
   g_autoptr(GError) error = NULL;
   const guint8 *new_id;
   gsize new_id_len = 0;
@@ -898,8 +893,9 @@ egismoc_enroll_commit (FpSdcpDevice *sdcp_device,
     goto out_fail;
 
   payload_len = fpi_byte_writer_get_size (&writer);
-  egismoc_exec_cmd (FP_DEVICE (self), fpi_byte_writer_reset_and_get_data (&writer),
-                    payload_len, g_free, egismoc_enroll_commit_cb);
+  payload = fpi_byte_writer_reset_and_get_data (&writer);
+  egismoc_exec_cmd (FP_DEVICE (self), payload, payload_len,
+                    egismoc_enroll_commit_cb);
   return;
 
 out_fail:
@@ -945,10 +941,10 @@ egismoc_enroll_status_report (FpDevice    *device,
 }
 
 static void
-egismoc_read_capture_cb (FpDevice *device,
-                         guchar   *buffer_in,
-                         gsize     length_in,
-                         GError   *error)
+egismoc_read_capture_cb (FpDevice     *device,
+                         const guint8 *buffer_in,
+                         gsize         length_in,
+                         GError       *error)
 {
   fp_dbg ("Read capture callback");
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
@@ -1006,10 +1002,10 @@ egismoc_read_capture_cb (FpDevice *device,
 }
 
 static void
-egismoc_enroll_starting_cb (FpDevice *device,
-                            guchar   *buffer_in,
-                            gsize     length_in,
-                            GError   *error)
+egismoc_enroll_starting_cb (FpDevice     *device,
+                            const guint8 *buffer_in,
+                            gsize         length_in,
+                            GError       *error)
 {
   fp_dbg ("Enroll starting callback");
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
@@ -1043,10 +1039,10 @@ egismoc_enroll_starting_cb (FpDevice *device,
 }
 
 static void
-egismoc_enroll_check_cb (FpDevice *device,
-                         guchar   *buffer_in,
-                         gsize     length_in,
-                         GError   *error)
+egismoc_enroll_check_cb (FpDevice     *device,
+                         const guint8 *buffer_in,
+                         gsize         length_in,
+                         GError       *error)
 {
   fp_dbg ("Enroll check callback");
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
@@ -1184,7 +1180,7 @@ egismoc_enroll_run_state (FpiSsm   *ssm,
     case ENROLL_GET_ENROLLED_IDS:
       /* get enrolled_ids from device for use in check stages below */
       egismoc_exec_cmd (device, cmd_list, G_N_ELEMENTS (cmd_list),
-                        NULL, egismoc_list_fill_enrolled_ids_cb);
+                        egismoc_list_fill_enrolled_ids_cb);
       break;
 
     case ENROLL_CHECK_ENROLLED_NUM:
@@ -1199,12 +1195,12 @@ egismoc_enroll_run_state (FpiSsm   *ssm,
 
     case ENROLL_SENSOR_RESET:
       egismoc_exec_cmd (device, cmd_sensor_reset, G_N_ELEMENTS (cmd_sensor_reset),
-                        NULL, egismoc_task_ssm_next_state_cb);
+                        egismoc_task_ssm_next_state_cb);
       break;
 
     case ENROLL_SENSOR_ENROLL:
       egismoc_exec_cmd (device, cmd_sensor_enroll, G_N_ELEMENTS (cmd_sensor_enroll),
-                        NULL, egismoc_task_ssm_next_state_cb);
+                        egismoc_task_ssm_next_state_cb);
       break;
 
     case ENROLL_WAIT_FINGER:
@@ -1213,28 +1209,27 @@ egismoc_enroll_run_state (FpiSsm   *ssm,
 
     case ENROLL_SENSOR_CHECK:
       egismoc_exec_cmd (device, cmd_sensor_check, G_N_ELEMENTS (cmd_sensor_check),
-                        NULL, egismoc_task_ssm_next_state_cb);
+                        egismoc_task_ssm_next_state_cb);
       break;
 
     case ENROLL_CHECK:
       payload = egismoc_get_check_cmd (device, &payload_length);
-      egismoc_exec_cmd (device, g_steal_pointer (&payload), payload_length,
-                        g_free, egismoc_enroll_check_cb);
+      egismoc_exec_cmd (device, payload, payload_length,
+                        egismoc_enroll_check_cb);
       break;
 
     case ENROLL_START:
       egismoc_exec_cmd (device, cmd_enroll_starting, G_N_ELEMENTS (cmd_enroll_starting),
-                        NULL, egismoc_enroll_starting_cb);
+                        egismoc_enroll_starting_cb);
       break;
 
     case ENROLL_CAPTURE_SENSOR_RESET:
       egismoc_exec_cmd (device, cmd_sensor_reset, G_N_ELEMENTS (cmd_sensor_reset),
-                        NULL, egismoc_task_ssm_next_state_cb);
+                        egismoc_task_ssm_next_state_cb);
       break;
 
     case ENROLL_CAPTURE_SENSOR_START_CAPTURE:
       egismoc_exec_cmd (device, cmd_sensor_start_capture, G_N_ELEMENTS (cmd_sensor_start_capture),
-                        NULL,
                         egismoc_task_ssm_next_state_cb);
       break;
 
@@ -1244,17 +1239,17 @@ egismoc_enroll_run_state (FpiSsm   *ssm,
 
     case ENROLL_CAPTURE_POST_WAIT_FINGER:
       egismoc_exec_cmd (device, cmd_capture_post_wait_finger, G_N_ELEMENTS (cmd_capture_post_wait_finger),
-                        NULL, egismoc_task_ssm_next_state_cb);
+                        egismoc_task_ssm_next_state_cb);
       break;
 
     case ENROLL_CAPTURE_READ_RESPONSE:
       egismoc_exec_cmd (device, cmd_read_capture, G_N_ELEMENTS (cmd_read_capture),
-                        NULL, egismoc_read_capture_cb);
+                        egismoc_read_capture_cb);
       break;
 
     case ENROLL_COMMIT_START:
       egismoc_exec_cmd (device, cmd_commit_starting, G_N_ELEMENTS (cmd_commit_starting),
-                        NULL, egismoc_task_ssm_next_state_cb);
+                        egismoc_task_ssm_next_state_cb);
       break;
 
     case ENROLL_COMMIT:
@@ -1293,10 +1288,10 @@ identify_print_free (gpointer data)
 }
 
 static void
-egismoc_identify_complete_cb (FpDevice *device,
-                              guchar   *buffer_in,
-                              gsize     length_in,
-                              GError   *error)
+egismoc_identify_complete_cb (FpDevice     *device,
+                              const guint8 *buffer_in,
+                              gsize         length_in,
+                              GError       *error)
 {
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
   IdentifyPrint *print = fpi_ssm_get_data (self->task_ssm);
@@ -1313,10 +1308,10 @@ egismoc_identify_complete_cb (FpDevice *device,
 }
 
 static void
-egismoc_identify_check_cb (FpDevice *device,
-                           guchar   *buffer_in,
-                           gsize     length_in,
-                           GError   *error)
+egismoc_identify_check_cb (FpDevice     *device,
+                           const guint8 *buffer_in,
+                           gsize         length_in,
+                           GError       *error)
 {
   fp_dbg ("Identify check callback");
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
@@ -1363,7 +1358,7 @@ egismoc_identify_check_cb (FpDevice *device,
     }
 
   egismoc_exec_cmd (device, cmd_sensor_reset, G_N_ELEMENTS (cmd_sensor_reset),
-                    NULL, egismoc_identify_complete_cb);
+                    egismoc_identify_complete_cb);
 }
 
 static void
@@ -1379,7 +1374,7 @@ egismoc_identify_run_state (FpiSsm   *ssm,
     case IDENTIFY_GET_ENROLLED_IDS:
       /* get enrolled_ids from device for use in check stages below */
       egismoc_exec_cmd (device, cmd_list, G_N_ELEMENTS (cmd_list),
-                        NULL, egismoc_list_fill_enrolled_ids_cb);
+                        egismoc_list_fill_enrolled_ids_cb);
       break;
 
     case IDENTIFY_CHECK_ENROLLED_NUM:
@@ -1394,12 +1389,12 @@ egismoc_identify_run_state (FpiSsm   *ssm,
 
     case IDENTIFY_SENSOR_RESET:
       egismoc_exec_cmd (device, cmd_sensor_reset, G_N_ELEMENTS (cmd_sensor_reset),
-                        NULL, egismoc_task_ssm_next_state_cb);
+                        egismoc_task_ssm_next_state_cb);
       break;
 
     case IDENTIFY_SENSOR_IDENTIFY:
       egismoc_exec_cmd (device, cmd_sensor_identify, G_N_ELEMENTS (cmd_sensor_identify),
-                        NULL, egismoc_task_ssm_next_state_cb);
+                        egismoc_task_ssm_next_state_cb);
       break;
 
     case IDENTIFY_WAIT_FINGER:
@@ -1408,13 +1403,13 @@ egismoc_identify_run_state (FpiSsm   *ssm,
 
     case IDENTIFY_SENSOR_CHECK:
       egismoc_exec_cmd (device, cmd_sensor_check, G_N_ELEMENTS (cmd_sensor_check),
-                        NULL, egismoc_task_ssm_next_state_cb);
+                        egismoc_task_ssm_next_state_cb);
       break;
 
     case IDENTIFY_CHECK:
       payload = egismoc_get_check_cmd (device, &payload_length);
-      egismoc_exec_cmd (device, g_steal_pointer (&payload), payload_length,
-                        g_free, egismoc_identify_check_cb);
+      egismoc_exec_cmd (device, payload, payload_length,
+                        egismoc_identify_check_cb);
       break;
     }
 }
@@ -1495,10 +1490,10 @@ egismoc_parse_connect (const guint8  *buffer,
 }
 
 static void
-egismoc_connect_cb (FpDevice *device,
-                    guchar   *buffer_in,
-                    gsize     length_in,
-                    GError   *error)
+egismoc_connect_cb (FpDevice     *device,
+                    const guint8 *buffer_in,
+                    gsize         length_in,
+                    GError       *error)
 {
   g_autoptr(GBytes) device_random = NULL;
   g_autoptr(FpiSdcpClaim) claim = NULL;
@@ -1517,6 +1512,7 @@ egismoc_connect (FpSdcpDevice *sdcp_device)
   fp_dbg ("Connect");
   FpDevice *device = FP_DEVICE (sdcp_device);
   g_auto(FpiByteWriter) writer = {0};
+  g_autofree guint8 *payload = NULL;
   gboolean written = TRUE;
   g_autoptr(GError) error = NULL;
 
@@ -1540,7 +1536,7 @@ egismoc_connect (FpSdcpDevice *sdcp_device)
   host_random_ptr = g_bytes_get_data (host_random, &host_random_len);
   host_public_key_ptr = g_bytes_get_data (host_public_key, &host_public_key_len);
 
-  const int length = G_N_ELEMENTS (cmd_sdcp_connect_prefix)
+  const gsize length = G_N_ELEMENTS (cmd_sdcp_connect_prefix)
                      + host_random_len
                      + host_public_key_len
                      + G_N_ELEMENTS (cmd_sdcp_connect_suffix);
@@ -1568,8 +1564,8 @@ egismoc_connect (FpSdcpDevice *sdcp_device)
     }
 
   /* Execute the egismoc SDCP "Connect" command */
-  egismoc_exec_cmd (device,
-                    fpi_byte_writer_reset_and_get_data (&writer), length, g_free,
+  payload = fpi_byte_writer_reset_and_get_data (&writer);
+  egismoc_exec_cmd (device, payload, length,
                     egismoc_connect_cb);
 }
 
@@ -1586,16 +1582,16 @@ egismoc_dev_init_done (FpiSsm   *ssm,
 }
 
 static void
-egismoc_fw_version_cb (FpDevice *device,
-                       guchar   *buffer_in,
-                       gsize     length_in,
-                       GError   *error)
+egismoc_fw_version_cb (FpDevice     *device,
+                       const guint8 *buffer_in,
+                       gsize         length_in,
+                       GError       *error)
 {
   fp_dbg ("Firmware version callback");
   FpiDeviceEgisMoc *self = FPI_DEVICE_EGISMOC (device);
   g_autofree gchar *fw_version = NULL;
   gsize prefix_length;
-  guchar *fw_version_start;
+  const guint8 *fw_version_start;
   gsize fw_version_length;
 
   if (error)
@@ -1632,7 +1628,7 @@ egismoc_fw_version_cb (FpDevice *device,
     }
   fw_version_start = buffer_in + prefix_length;
   fw_version_length = length_in - prefix_length - G_N_ELEMENTS (rsp_fw_version_suffix);
-  fw_version = g_strndup ((gchar *) fw_version_start, fw_version_length);
+  fw_version = g_strndup ((const gchar *) fw_version_start, fw_version_length);
 
   fp_info ("Device firmware version is %s", fw_version);
 
@@ -1689,7 +1685,7 @@ egismoc_dev_init_handler (FpiSsm   *ssm,
 
     case DEV_GET_FW_VERSION:
       egismoc_exec_cmd (device, cmd_fw_version, G_N_ELEMENTS (cmd_fw_version),
-                        NULL, egismoc_fw_version_cb);
+                        egismoc_fw_version_cb);
       return;
 
     default:
