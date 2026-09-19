@@ -1,3 +1,10 @@
+libfprint-etu906 (0.1.1-1) unstable; urgency=medium
+
+  * Report public certificate metadata when SDCP verification fails.
+  * Preserve strict certificate validation and reject expired certificates.
+
+ -- libfprint ETU906 maintainers <noreply@example.invalid>  Sat, 19 Sep 2026 09:00:00 +0000
+
 libfprint-etu906 (0.1.0-1) unstable; urgency=medium
 
   * Initial ETU906 private libfprint package.

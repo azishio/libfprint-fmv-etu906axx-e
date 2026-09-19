@@ -296,6 +296,48 @@ out:
   return NULL;
 }
 
+/* Only public metadata from the certificate that actually failed validation. */
+static gchar *
+fpi_sdcp_certificate_details (X509_STORE_CTX *ctx)
+{
+  X509 *cert = X509_STORE_CTX_get_current_cert (ctx); /* borrowed */
+  BIO *bio = NULL;
+  guint8 digest[EVP_MAX_MD_SIZE];
+  unsigned int digest_length = 0;
+  gchar *data = NULL;
+  gchar *details = NULL;
+  long length;
+
+  if (!cert || !(bio = BIO_new (BIO_s_mem ())))
+    goto out;
+
+  if (BIO_printf (bio, "depth=%d; notBefore=", X509_STORE_CTX_get_error_depth (ctx)) <= 0 ||
+      ASN1_TIME_print (bio, X509_get0_notBefore (cert)) != 1 ||
+      BIO_puts (bio, "; notAfter=") <= 0 ||
+      ASN1_TIME_print (bio, X509_get0_notAfter (cert)) != 1 ||
+      BIO_puts (bio, "; SHA256=") <= 0 ||
+      X509_digest (cert, EVP_sha256 (), digest, &digest_length) != 1)
+    goto out;
+
+  for (guint i = 0; i < digest_length; i++)
+    if (BIO_printf (bio, "%02x", digest[i]) <= 0)
+      goto out;
+
+  /* RFC2253 escapes control characters in untrusted certificate names. */
+  if (BIO_puts (bio, "; subject=") <= 0 ||
+      X509_NAME_print_ex (bio, X509_get_subject_name (cert), 0, XN_FLAG_RFC2253) < 0 ||
+      BIO_puts (bio, "; issuer=") <= 0 ||
+      X509_NAME_print_ex (bio, X509_get_issuer_name (cert), 0, XN_FLAG_RFC2253) < 0)
+    goto out;
+
+  length = BIO_get_mem_data (bio, &data);
+  if (length > 0)
+    details = g_strndup (data, MIN (length, 4096));
+out:
+  BIO_free (bio);
+  return details ? details : g_strdup ("certificate details unavailable");
+}
+
 static gboolean
 fpi_sdcp_verify_certificate (X509    *certificate,
                              GError **error)
@@ -303,6 +345,7 @@ fpi_sdcp_verify_certificate (X509    *certificate,
   X509_STORE *sdcp_truststore = NULL;
   X509_VERIFY_PARAM *param = NULL;
   X509_STORE_CTX *ctx = NULL;
+  g_autofree gchar *details = NULL;
 
   sdcp_truststore = fpi_sdcp_get_truststore (error);
   if (!sdcp_truststore)
@@ -357,10 +400,12 @@ out_error:
   print_openssl_errors ();
   goto out;
 out_verify_error:
+  details = fpi_sdcp_certificate_details (ctx);
   g_propagate_error (error,
                      fpi_device_error_new_msg (FP_DEVICE_ERROR_UNTRUSTED,
-                                               "OpenSSL error verifying model certificate: %s",
-                                               X509_verify_cert_error_string (X509_STORE_CTX_get_error (ctx))));
+                                               "OpenSSL error verifying model certificate: %s [%s]",
+                                               X509_verify_cert_error_string (X509_STORE_CTX_get_error (ctx)),
+                                               details));
 out:
   g_clear_pointer (&param, X509_VERIFY_PARAM_free);
   g_clear_pointer (&ctx, X509_STORE_CTX_free);

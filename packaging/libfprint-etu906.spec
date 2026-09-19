@@ -1,5 +1,5 @@
 Name:           libfprint-etu906
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        Private libfprint ETU906 fork for fprintd
 License:        LGPL-2.1-or-later
@@ -94,5 +94,8 @@ fi
 %exclude %{_privatelibdir}/libfprint-2.so
 
 %changelog
+* Sat Sep 19 2026 libfprint ETU906 maintainers <noreply@example.invalid> - 0.1.1-1
+- Report public certificate metadata on validation failure; retain strict verification.
+
 * Sat Sep 19 2026 libfprint ETU906 maintainers <noreply@example.invalid> - 0.1.0-1
 - Initial ETU906 private libfprint package.

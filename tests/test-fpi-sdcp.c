@@ -405,7 +405,7 @@ test_verify_connect_rejects_expired_certificate (void)
   g_autoptr(GError) error = NULL;
   FpiSdcpClaim *claim = get_fake_sdcp_claim ();
 
-  fpi_sdcp_test_set_verification_time (0);
+  fpi_sdcp_test_set_verification_time (1789776000); /* 2026-09-19 UTC */
   g_assert_false (fpi_sdcp_verify_connect (host_private_key,
                                             host_random,
                                             device_random,
@@ -417,6 +417,15 @@ test_verify_connect_rejects_expired_certificate (void)
                                             &error));
   g_assert_nonnull (error);
   g_assert_null (application_secret);
+  g_assert_nonnull (strstr (error->message, "certificate has expired"));
+  g_assert_nonnull (strstr (error->message, "depth=0; notBefore="));
+  g_assert_nonnull (strstr (error->message, "; notAfter="));
+  g_assert_nonnull (strstr (error->message, "; subject="));
+  g_assert_nonnull (strstr (error->message, "; issuer="));
+  g_autofree gchar *fingerprint = g_compute_checksum_for_bytes (G_CHECKSUM_SHA256,
+                                                                claim->model_certificate);
+  g_assert_nonnull (strstr (error->message, fingerprint));
+  fpi_sdcp_test_set_verification_time (0);
   fpi_sdcp_claim_free (claim);
 }
 
