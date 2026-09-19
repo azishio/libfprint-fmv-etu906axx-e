@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: libfprint
+Source: https://gitlab.freedesktop.org/libfprint/libfprint
+
+Files: *
+Copyright: libfprint contributors
+License: LGPL-2.1-or-later
+ On Debian systems, the complete GNU Lesser General Public License, version
+ 2.1, can be found in /usr/share/common-licenses/LGPL-2.1.  The upstream
+ COPYING file shipped with this package also contains the applicable license.

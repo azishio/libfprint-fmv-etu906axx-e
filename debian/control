@@ -1,0 +1,36 @@
+Source: libfprint-etu906
+Section: libs
+Priority: optional
+Maintainer: libfprint ETU906 maintainers <noreply@example.invalid>
+Build-Depends:
+ debhelper-compat (= 13),
+ meson (>= 0.59.0),
+ ninja-build,
+ pkg-config,
+ libglib2.0-dev (>= 2.68),
+ libgusb-dev (>= 0.2.0),
+ libssl-dev,
+ libcairo2-dev,
+ gobject-introspection,
+ libgirepository1.0-dev,
+ libumockdev-dev,
+ umockdev,
+ gir1.2-umockdev-1.0,
+ appstream,
+ python3,
+ python3-gi,
+ python3-cairo,
+ python3-gi-cairo
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+
+Package: libfprint-etu906
+Architecture: amd64
+Depends:
+ fprintd,
+ ${misc:Depends},
+ ${shlibs:Depends}
+Description: private libfprint ETU906 fork for fprintd
+ This package installs an ETU906-enabled libfprint in a private library
+ directory and selects it for the existing fprintd service.  The distro
+ libfprint library and fingerprint data remain untouched.

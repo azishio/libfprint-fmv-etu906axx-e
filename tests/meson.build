@@ -272,6 +272,10 @@ if 'sdcp' in driver_helpers
     ]
 endif
 
+if 'egismoc' in drivers
+    unit_tests += ['egismoc']
+endif
+
 test_utils = static_library('fprint-test-utils',
     sources: test_util_sources,
     dependencies: libfprint_private_dep,
@@ -347,7 +351,7 @@ appstreamcli = find_program('appstreamcli', required: false)
 if appstreamcli.found()
     test('metainfo-validate',
         appstreamcli,
-        args: ['validate', metainfo_generator],
+        args: ['validate', '--no-net', metainfo_generator],
         depends: metainfo_generator,
         suite: ['data', 'no-valgrind'],
     )

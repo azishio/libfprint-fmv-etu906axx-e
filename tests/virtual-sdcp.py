@@ -83,6 +83,21 @@ class VirtualSDCP(VirtualSDCPBase):
         GLib.log_remove_handler('libfprint-sdcp_device', handler_id)
         assert success[0]
 
+    def test_idle_suspend_reauth(self):
+        template = FPrint.Print.new(self.dev)
+        template.set_finger(FPrint.Finger.LEFT_THUMB)
+        enrolled = self.dev.enroll_sync(template, None, None, None)
+
+        # Simulate a cached key that no longer matches the sensor after sleep.
+        stale_key = GLib.Bytes.new(bytes(32))
+        self.dev.set_property('sdcp-data', stale_key)
+        self.dev.suspend_sync()
+        self.dev.resume_sync()
+        matched, identified = self.dev.verify_sync(enrolled)
+        self.assertTrue(matched)
+        self.assertTrue(identified.equal(enrolled))
+        self.assertFalse(self.dev.get_property('sdcp-data').equal(stale_key))
+
     def test_list(self):
         prints = self.dev.list_prints_sync()
         assert len(prints) == 0

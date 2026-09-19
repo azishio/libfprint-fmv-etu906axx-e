@@ -1,0 +1,57 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/architecture.mk
+
+export DH_VERBOSE = 1
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+builddir = obj-$(DEB_HOST_GNU_TYPE)
+
+%:
+	dh $@ --buildsystem=meson
+
+override_dh_auto_configure:
+	meson setup $(builddir) \
+		--wrap-mode=nodownload \
+		--buildtype=plain \
+		--prefix=/usr \
+		--sysconfdir=/etc \
+		--localstatedir=/var \
+		--libdir=/usr/lib/$(DEB_HOST_MULTIARCH)/libfprint-etu906 \
+		-Ddrivers=egismoc \
+		-Dintrospection=true \
+		-Ddoc=false \
+		-Dgtk-examples=false \
+		-Dinstalled-tests=false \
+		-Dudev_rules=disabled \
+		-Dudev_hwdb=disabled
+
+override_dh_auto_test:
+	if [ "$(filter nocheck,$(DEB_BUILD_OPTIONS))" ]; then \
+		exit 0; \
+	fi
+	dh_auto_test -- --print-errorlogs
+
+# dh_auto_install stages this single binary package directly in its package
+# directory.  Keep only the private runtime library and the service drop-in;
+# the public development/introspection files would collide with the distro
+# libfprint package.
+override_dh_auto_install:
+	dh_auto_install
+	rm -rf debian/libfprint-etu906/usr/include/libfprint-2
+	rm -rf debian/libfprint-etu906/usr/lib/*/libfprint-etu906/pkgconfig
+	rm -rf debian/libfprint-etu906/usr/lib/*/libfprint-etu906/girepository-1.0
+	rm -f debian/libfprint-etu906/usr/lib/*/libfprint-etu906/libfprint-2.so
+	rm -rf debian/libfprint-etu906/usr/share/gir-1.0
+	rm -f debian/libfprint-etu906/usr/share/metainfo/org.freedesktop.libfprint.metainfo.xml
+	rmdir --ignore-fail-on-non-empty debian/libfprint-etu906/usr/include \
+		debian/libfprint-etu906/usr/share/metainfo
+	install -Dpm 0644 packaging/systemd/debian/fprintd.service.d/libfprint-etu906.conf \
+		debian/libfprint-etu906/usr/lib/systemd/system/fprintd.service.d/libfprint-etu906.conf
+
+override_dh_missing:
+	dh_missing --fail-missing
+
+# Keep the private SONAME out of public dependency resolution.
+override_dh_makeshlibs:
+	dh_makeshlibs --exclude=libfprint-2.so

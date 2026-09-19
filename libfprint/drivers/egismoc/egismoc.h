@@ -76,6 +76,9 @@ static gsize rsp_fw_version_suffix_len = sizeof (rsp_fw_version_suffix) / sizeof
 static guchar rsp_sensor_has_finger_suffix[] = {0x90, 0x00, 0x90, 0x00};
 static gsize rsp_sensor_has_finger_suffix_len = sizeof (rsp_sensor_has_finger_suffix) / sizeof (rsp_sensor_has_finger_suffix[0]);
 
+/* Empty List response in the captured Egis protocol. */
+static const guchar rsp_list_empty_suffix[] = {0x65, 0xfe};
+
 static guchar cmd_list[] = {0x00, 0x00, 0x00, 0x07, 0x50, 0x19, 0x04, 0x00, 0x00, 0x01, 0x40};
 static gsize cmd_list_len = sizeof (cmd_list) / sizeof (cmd_list[0]);
 

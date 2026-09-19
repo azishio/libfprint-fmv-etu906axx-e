@@ -1,0 +1,241 @@
+name: libfprint-etu906 packaging
+
+on:
+  pull_request:
+  push:
+    branches: ['**']
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  debian:
+    name: Ubuntu 26.04 amd64
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.04
+    steps:
+      - name: Bootstrap checkout tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git
+      # actions/checkout v4.2.2; tag verified against this commit.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install build and test dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential fakeroot dpkg-dev debhelper devscripts \
+            meson ninja-build pkg-config \
+            libglib2.0-dev libgusb-dev libssl-dev libcairo2-dev \
+            gobject-introspection libgirepository1.0-dev \
+            libumockdev-dev umockdev gir1.2-umockdev-1.0 appstream \
+            python3 python3-gi python3-cairo python3-gi-cairo
+      - name: Build Debian package and run tests
+        run: ./scripts/build-deb.sh . dist/deb
+      # actions/upload-artifact v4.6.2; tag verified against this commit.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: debian-packages
+          path: dist/deb/*.deb
+          if-no-files-found: error
+
+  fedora:
+    name: Fedora 44 x86_64
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    steps:
+      - name: Bootstrap checkout tools
+        run: dnf -y install ca-certificates git
+      # actions/checkout v4.2.2; tag verified against this commit.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install build and test dependencies
+        run: |
+          dnf -y install \
+            gcc gcc-c++ make rpm-build \
+            meson ninja-build pkgconf-pkg-config \
+            glib2-devel libgusb-devel openssl-devel \
+            systemd-rpm-macros systemd-devel appstream cairo-devel gobject-introspection-devel \
+            python3-gobject python3-cairo umockdev umockdev-devel
+      - name: Build Fedora package and run tests
+        run: ./scripts/build-rpm.sh . dist/rpm
+      # actions/upload-artifact v4.6.2; tag verified against this commit.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fedora-packages
+          path: dist/rpm/*.rpm
+          if-no-files-found: error
+
+  debian-smoke:
+    name: Ubuntu 26.04 clean install/remove
+    needs: debian
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.04
+    steps:
+      - name: Bootstrap runtime tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates fprintd
+      # actions/download-artifact v4.3.0; tag verified against this commit.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: debian-packages
+          path: dist/deb
+      - name: Install, link-check, and remove package
+        run: |
+          system_lib=$(readlink -f /usr/lib/x86_64-linux-gnu/libfprint-2.so.2)
+          fprintd_bin=/usr/libexec/fprintd
+          test -x "$fprintd_bin" -a -f "$system_lib"
+          sha256sum "$system_lib" > /tmp/system-lib.sha256
+          ldd -r "$fprintd_bin" > /tmp/fprintd-linkage
+          ! grep -E 'not found|undefined symbol' /tmp/fprintd-linkage
+          loaded=$(awk '/libfprint-2.so.2 =>/{print $3}' /tmp/fprintd-linkage)
+          test "$(readlink -f "$loaded")" = "$system_lib"
+          deb=$(find dist/deb -maxdepth 1 -type f -name 'libfprint-etu906_*.deb' -print -quit)
+          test -n "$deb"
+          dpkg-deb --control "$deb" /tmp/etu906-control
+          test ! -e /tmp/etu906-control/shlibs
+          apt-get install -y "./$deb"
+          dpkg-query -W -f='${Status}\n' libfprint-etu906 | grep -q 'install ok installed'
+          dpkg -L libfprint-etu906 | grep -q '/libfprint-etu906/libfprint-2.so.2'
+          ! dpkg -L libfprint-etu906 | grep -q '/usr/lib/x86_64-linux-gnu/libfprint-2.so.2'
+          ! dpkg -L libfprint-etu906 | grep -Eq '/(pam|var/lib/fprint)(/|$)'
+          LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/libfprint-etu906 ldd -r "$fprintd_bin" > /tmp/fprintd-linkage
+          ! grep -E 'not found|undefined symbol' /tmp/fprintd-linkage
+          grep -q 'libfprint-2.so.2 => /usr/lib/x86_64-linux-gnu/libfprint-etu906/libfprint-2.so.2' /tmp/fprintd-linkage
+          sha256sum -c /tmp/system-lib.sha256
+          apt-get remove -y libfprint-etu906
+          test ! -e /usr/lib/x86_64-linux-gnu/libfprint-etu906/libfprint-2.so.2
+          test ! -e /usr/lib/systemd/system/fprintd.service.d/libfprint-etu906.conf
+          sha256sum -c /tmp/system-lib.sha256
+          ldd -r "$fprintd_bin" > /tmp/fprintd-linkage
+          ! grep -E 'not found|undefined symbol' /tmp/fprintd-linkage
+          loaded=$(awk '/libfprint-2.so.2 =>/{print $3}' /tmp/fprintd-linkage)
+          test "$(readlink -f "$loaded")" = "$system_lib"
+
+  fedora-smoke:
+    name: Fedora 44 clean install/remove
+    needs: fedora
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    steps:
+      - name: Bootstrap runtime tools
+        run: dnf -y install ca-certificates fprintd
+      # actions/download-artifact v4.3.0; tag verified against this commit.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: fedora-packages
+          path: dist/rpm
+      - name: Install, link-check, and remove package
+        run: |
+          system_lib=$(readlink -f /usr/lib64/libfprint-2.so.2)
+          fprintd_bin=/usr/libexec/fprintd
+          test -x "$fprintd_bin" -a -f "$system_lib"
+          sha256sum "$system_lib" > /tmp/system-lib.sha256
+          ldd -r "$fprintd_bin" > /tmp/fprintd-linkage
+          ! grep -E 'not found|undefined symbol' /tmp/fprintd-linkage
+          loaded=$(awk '/libfprint-2.so.2 =>/{print $3}' /tmp/fprintd-linkage)
+          test "$(readlink -f "$loaded")" = "$system_lib"
+          rpm_file=$(find dist/rpm -maxdepth 1 -type f -name 'libfprint-etu906-*.rpm' ! -name '*-debuginfo-*' ! -name '*-debugsource-*' -print -quit)
+          test -n "$rpm_file"
+          dnf -y install "$rpm_file"
+          rpm -q libfprint-etu906
+          rpm -ql libfprint-etu906 | grep -q '/libfprint-etu906/libfprint-2.so.2'
+          ! rpm -ql libfprint-etu906 | grep -Eq '/(pam|var/lib/fprint)(/|$)'
+          ! rpm -qp --provides "$rpm_file" | grep -q 'libfprint-2.so'
+          LD_LIBRARY_PATH=/usr/lib64/libfprint-etu906 ldd -r "$fprintd_bin" > /tmp/fprintd-linkage
+          ! grep -E 'not found|undefined symbol' /tmp/fprintd-linkage
+          grep -q 'libfprint-2.so.2 => /usr/lib64/libfprint-etu906/libfprint-2.so.2' /tmp/fprintd-linkage
+          sha256sum -c /tmp/system-lib.sha256
+          dnf -y remove libfprint-etu906
+          test ! -e /usr/lib64/libfprint-etu906/libfprint-2.so.2
+          test ! -e /usr/lib/systemd/system/fprintd.service.d/libfprint-etu906.conf
+          sha256sum -c /tmp/system-lib.sha256
+          ldd -r "$fprintd_bin" > /tmp/fprintd-linkage
+          ! grep -E 'not found|undefined symbol' /tmp/fprintd-linkage
+          loaded=$(awk '/libfprint-2.so.2 =>/{print $3}' /tmp/fprintd-linkage)
+          test "$(readlink -f "$loaded")" = "$system_lib"
+
+  sanitizers:
+    name: ASan and UBSan (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ubuntu:26.04, fedora:44]
+    container: ${{ matrix.image }}
+    steps:
+      - name: Bootstrap checkout tools
+        run: |
+          if command -v apt-get >/dev/null; then
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates git
+          else
+            dnf -y install ca-certificates git
+          fi
+      # actions/checkout v4.2.2; tag verified against this commit.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install build and test dependencies
+        run: |
+          if command -v apt-get >/dev/null; then
+            apt-get update
+            apt-get install -y --no-install-recommends \
+              build-essential meson ninja-build pkg-config \
+              libglib2.0-dev libgusb-dev libssl-dev libcairo2-dev \
+              gobject-introspection libgirepository1.0-dev \
+              libumockdev-dev umockdev gir1.2-umockdev-1.0 appstream \
+              python3 python3-gi python3-cairo python3-gi-cairo
+          else
+            dnf -y install gcc gcc-c++ libasan libubsan make meson ninja-build pkgconf-pkg-config \
+              glib2-devel libgusb-devel openssl-devel systemd-devel appstream \
+              cairo-devel gobject-introspection-devel python3-gobject python3-cairo \
+              umockdev umockdev-devel
+          fi
+      - name: Run ASan and UBSan tests
+        run: |
+          meson setup build-sanitize \
+            -Ddrivers=egismoc,virtual_image,virtual_device,virtual_device_storage,virtual_sdcp \
+            -Dintrospection=true \
+            -Ddoc=false \
+            -Dgtk-examples=false \
+            -Dinstalled-tests=false \
+            -Dudev_rules=disabled \
+            -Dudev_hwdb=disabled \
+            -Db_sanitize=address,undefined
+          meson compile -C build-sanitize
+          meson test -C build-sanitize --print-errorlogs
+
+  release:
+    name: Release tagged packages
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [debian, fedora, debian-smoke, fedora-smoke, sanitizers]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      # actions/checkout v4.2.2; tag verified against this commit.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/download-artifact v4.3.0; tag verified against this commit.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: release
+          merge-multiple: true
+      - name: Build source archive and checksums
+        run: |
+          test "$GITHUB_REF_NAME" = "v$(sed -n '1s/.*(\([^-]*\)-.*/\1/p' debian/changelog)"
+          test "$GITHUB_REF_NAME" = "v$(awk '/^Version:/{print $2}' packaging/libfprint-etu906.spec)"
+          ./scripts/make-source-tarball.sh . "release/libfprint-etu906-${GITHUB_REF_NAME#v}.tar.gz"
+          (cd release && sha256sum *.deb *.rpm *.tar.gz > SHA256SUMS)
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -- release/*.deb release/*.rpm release/*.tar.gz release/SHA256SUMS
+          release_args=(--title "$GITHUB_REF_NAME" --notes-file ETU906.md)
+          case "$GITHUB_REF_NAME" in
+            v0.*) release_args+=(--prerelease) ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" "${release_args[@]}" "$@"

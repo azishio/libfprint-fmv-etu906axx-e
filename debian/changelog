@@ -1,0 +1,5 @@
+libfprint-etu906 (0.1.0-1) unstable; urgency=medium
+
+  * Initial ETU906 private libfprint package.
+
+ -- libfprint ETU906 maintainers <noreply@example.invalid>  Sat, 19 Sep 2026 00:00:00 +0000

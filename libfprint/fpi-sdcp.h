@@ -23,6 +23,10 @@
 
 #include "fpi-sdcp-device.h"
 
+#ifdef FPI_SDCP_TESTING
+#include <time.h>
+#endif
+
 /**
  * fpi_sdcp_generate_host_key:
  * @private_key: (out) (transfer full): The host private key (sk_h)
@@ -80,6 +84,11 @@ gboolean fpi_sdcp_verify_connect (GBytes       *host_private_key,
                                   gboolean      verify_signatures,
                                   GBytes      **application_secret,
                                   GError      **error);
+
+#ifdef FPI_SDCP_TESTING
+/* Test-only clock injection; never available to production callers. */
+void fpi_sdcp_test_set_verification_time (time_t verification_time);
+#endif
 
 /**
  * fpi_sdcp_verify_reconnect:

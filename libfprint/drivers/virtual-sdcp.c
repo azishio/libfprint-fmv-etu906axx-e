@@ -310,8 +310,12 @@ fpi_device_virtual_sdcp_class_init (FpDeviceVirtualSdcpClass *klass)
   dev_class->nr_enroll_stages = 1;
   dev_class->scan_type = FP_SCAN_TYPE_PRESS;
 
-  sdcp_dev_class->ignore_device_certificate = FALSE;
-  sdcp_dev_class->ignore_device_signatures = FALSE;
+  /* This synthetic transport tests MACs and API lifecycle. Its example claim
+   * mixes a real, expired certificate with unrelated sample signing keys.
+   * Attestation is tested separately against the product verifier in C.
+   * This virtual driver must never be included in the ETU906 runtime package. */
+  sdcp_dev_class->ignore_device_certificate = TRUE;
+  sdcp_dev_class->ignore_device_signatures = TRUE;
 
   sdcp_dev_class->open = dev_open;
   sdcp_dev_class->connect = dev_connect;

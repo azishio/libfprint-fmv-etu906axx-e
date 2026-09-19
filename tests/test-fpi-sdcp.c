@@ -20,8 +20,18 @@
 #define FP_COMPONENT "test_fpi_sdcp"
 #include "fpi-log.h"
 
+#include <openssl/x509v3.h>
+
+#define FPI_SDCP_TESTING
 #include "fpi-sdcp.h"
 #include "fpi-sdcp-device.h"
+
+/* Compile the implementation into this test so the fixed-clock hook remains
+ * private to test code and does not become a production API. */
+#undef FP_COMPONENT
+#include "../libfprint/fpi-sdcp.c"
+#undef FP_COMPONENT
+#define FP_COMPONENT "test_fpi_sdcp"
 
 /* We can re-use the test payloads from virtual-sdcp */
 #include "drivers/virtual-sdcp.h"
@@ -54,6 +64,20 @@ g_bytes_from_hex (const gchar *hex)
   return g_steal_pointer (&res);
 }
 
+static GBytes *
+g_bytes_with_first_byte_flipped (GBytes *bytes)
+{
+  gsize len = 0;
+  guint8 *copy;
+
+  g_bytes_get_data (bytes, &len);
+  g_assert_cmpuint (len, >, 0);
+  copy = g_malloc (len);
+  memcpy (copy, g_bytes_get_data (bytes, NULL), len);
+  copy[0] ^= 1;
+  return g_bytes_new_take (copy, len);
+}
+
 static FpiSdcpClaim *
 get_fake_sdcp_claim (void)
 {
@@ -80,12 +104,6 @@ test_generate_enrollment_id (void)
   g_autoptr(GBytes) expected_id = g_bytes_from_hex (enrollment_id_hex);
 
   id = fpi_sdcp_generate_enrollment_id (application_secret, nonce, &error);
-
-  fp_dbg ("id:");
-  fp_dbg_hex_dump_gbytes (id);
-
-  fp_dbg ("expected:");
-  fp_dbg_hex_dump_gbytes (expected_id);
 
   g_assert (g_bytes_equal (expected_id, id));
   g_assert_null (error);
@@ -135,23 +153,437 @@ test_verify_connect (void)
                                           device_random,
                                           claim,
                                           connect_mac,
-                                          TRUE,
-                                          TRUE,
+                                          FALSE,
+                                          FALSE,
                                           &application_secret,
                                           &error));
 
   g_assert_null (error);
   g_assert (g_bytes_get_size (application_secret) == SDCP_APPLICATION_SECRET_SIZE);
 
-  fp_dbg ("application_secret:");
-  fp_dbg_hex_dump_gbytes (application_secret);
-
-  fp_dbg ("expected:");
-  fp_dbg_hex_dump_gbytes (expected_application_secret);
-
   g_assert_true (g_bytes_equal (expected_application_secret, application_secret));
 
   fpi_sdcp_claim_free (claim);
+}
+
+static void
+test_verify_connect_validates_certificate_at_fixture_time (void)
+{
+  g_autoptr(GBytes) application_secret = NULL;
+  g_autoptr(GError) error = NULL;
+  g_autoptr(GBytes) host_private_key = g_bytes_from_hex (host_private_key_hex);
+  g_autoptr(GBytes) host_random = g_bytes_from_hex (host_random_hex);
+  g_autoptr(GBytes) device_random = g_bytes_from_hex (device_random_hex);
+  g_autoptr(GBytes) connect_mac = g_bytes_from_hex (connect_mac_hex);
+  FpiSdcpClaim *claim = get_fake_sdcp_claim ();
+
+  /* The historical Microsoft sample certificate is valid at this fixed test
+   * instant. The clock injection is compiled only into this test translation
+   * unit under FPI_SDCP_TESTING. */
+  fpi_sdcp_test_set_verification_time (1672531200);
+
+  g_assert_true (fpi_sdcp_verify_connect (host_private_key,
+                                          host_random,
+                                          device_random,
+                                          claim,
+                                          connect_mac,
+                                          TRUE,
+                                          FALSE,
+                                          &application_secret,
+                                          &error));
+  g_assert_null (error);
+  g_assert_nonnull (application_secret);
+
+  fpi_sdcp_claim_free (claim);
+  fpi_sdcp_test_set_verification_time (0);
+}
+
+static void
+test_verify_device_signature_vector (void)
+{
+  g_autoptr(GError) error = NULL;
+  g_autoptr(GBytes) device_public_key = g_bytes_from_hex (device_public_key_hex);
+  g_autoptr(GBytes) firmware_hash = g_bytes_from_hex (firmware_hash_hex);
+  g_autoptr(GBytes) firmware_public_key = g_bytes_from_hex (firmware_public_key_hex);
+  g_autoptr(GBytes) device_signature = g_bytes_from_hex (device_signature_hex);
+  EVP_PKEY *device_pkey;
+  const guint8 prefix[] = { 0xc0, 0x01 };
+
+  device_pkey = fpi_sdcp_get_public_pkey (device_public_key, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (device_pkey);
+
+  g_assert_true (fpi_sdcp_verify_signature (device_pkey,
+                                            prefix,
+                                            sizeof (prefix),
+                                            firmware_hash,
+                                            firmware_public_key,
+                                            device_signature,
+                                            &error));
+  g_assert_no_error (error);
+  g_clear_pointer (&device_pkey, EVP_PKEY_free);
+}
+
+static void
+test_verify_device_signature_rejects_modified_vector (void)
+{
+  g_autoptr(GError) error = NULL;
+  g_autoptr(GBytes) device_public_key = g_bytes_from_hex (device_public_key_hex);
+  g_autoptr(GBytes) firmware_hash = g_bytes_from_hex (firmware_hash_hex);
+  g_autoptr(GBytes) firmware_public_key = g_bytes_from_hex (firmware_public_key_hex);
+  g_autoptr(GBytes) device_signature = g_bytes_from_hex (device_signature_hex);
+  g_autoptr(GBytes) bad_signature = g_bytes_with_first_byte_flipped (device_signature);
+  EVP_PKEY *device_pkey;
+  const guint8 prefix[] = { 0xc0, 0x01 };
+
+  device_pkey = fpi_sdcp_get_public_pkey (device_public_key, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (device_pkey);
+
+  g_assert_false (fpi_sdcp_verify_signature (device_pkey,
+                                             prefix,
+                                             sizeof (prefix),
+                                             firmware_hash,
+                                             firmware_public_key,
+                                             bad_signature,
+                                             &error));
+  g_assert_nonnull (error);
+  g_clear_pointer (&device_pkey, EVP_PKEY_free);
+}
+
+static void
+test_verify_connect_rejects_bad_mac (void)
+{
+  g_autoptr(GBytes) application_secret = NULL;
+  g_autoptr(GBytes) host_private_key = g_bytes_from_hex (host_private_key_hex);
+  g_autoptr(GBytes) host_random = g_bytes_from_hex (host_random_hex);
+  g_autoptr(GBytes) device_random = g_bytes_from_hex (device_random_hex);
+  g_autoptr(GBytes) connect_mac = g_bytes_from_hex (connect_mac_hex);
+  g_autoptr(GBytes) bad_mac = g_bytes_with_first_byte_flipped (connect_mac);
+  g_autoptr(GError) error = NULL;
+  FpiSdcpClaim *claim = get_fake_sdcp_claim ();
+
+  g_assert_false (fpi_sdcp_verify_connect (host_private_key,
+                                            host_random,
+                                            device_random,
+                                            claim,
+                                            bad_mac,
+                                            FALSE,
+                                            FALSE,
+                                            &application_secret,
+                                            &error));
+  g_assert_nonnull (error);
+  g_assert_null (application_secret);
+  fpi_sdcp_claim_free (claim);
+}
+
+static void
+test_verify_connect_rejects_modified_claim (void)
+{
+  g_autoptr(GBytes) application_secret = NULL;
+  g_autoptr(GBytes) host_private_key = g_bytes_from_hex (host_private_key_hex);
+  g_autoptr(GBytes) host_random = g_bytes_from_hex (host_random_hex);
+  g_autoptr(GBytes) device_random = g_bytes_from_hex (device_random_hex);
+  g_autoptr(GBytes) connect_mac = g_bytes_from_hex (connect_mac_hex);
+  g_autoptr(GBytes) firmware_hash = g_bytes_from_hex (firmware_hash_hex);
+  g_autoptr(GError) error = NULL;
+  FpiSdcpClaim *claim = get_fake_sdcp_claim ();
+
+  g_clear_pointer (&claim->firmware_hash, g_bytes_unref);
+  claim->firmware_hash = g_bytes_with_first_byte_flipped (firmware_hash);
+
+  g_assert_false (fpi_sdcp_verify_connect (host_private_key,
+                                            host_random,
+                                            device_random,
+                                            claim,
+                                            connect_mac,
+                                            FALSE,
+                                            FALSE,
+                                            &application_secret,
+                                            &error));
+  g_assert_nonnull (error);
+  g_assert_null (application_secret);
+  fpi_sdcp_claim_free (claim);
+}
+
+static void
+test_verify_connect_rejects_wrong_key (void)
+{
+  g_autoptr(GBytes) application_secret = NULL;
+  g_autoptr(GBytes) host_private_key = g_bytes_from_hex (host_private_key_hex);
+  g_autoptr(GBytes) wrong_key = g_bytes_with_first_byte_flipped (host_private_key);
+  g_autoptr(GBytes) host_random = g_bytes_from_hex (host_random_hex);
+  g_autoptr(GBytes) device_random = g_bytes_from_hex (device_random_hex);
+  g_autoptr(GBytes) connect_mac = g_bytes_from_hex (connect_mac_hex);
+  g_autoptr(GError) error = NULL;
+  FpiSdcpClaim *claim = get_fake_sdcp_claim ();
+
+  g_assert_false (fpi_sdcp_verify_connect (wrong_key,
+                                            host_random,
+                                            device_random,
+                                            claim,
+                                            connect_mac,
+                                            FALSE,
+                                            FALSE,
+                                            &application_secret,
+                                            &error));
+  g_assert_nonnull (error);
+  g_assert_null (application_secret);
+  fpi_sdcp_claim_free (claim);
+}
+
+static void
+test_verify_connect_rejects_bad_model_signature (void)
+{
+  g_autoptr(GBytes) application_secret = NULL;
+  g_autoptr(GBytes) host_private_key = g_bytes_from_hex (host_private_key_hex);
+  g_autoptr(GBytes) host_random = g_bytes_from_hex (host_random_hex);
+  g_autoptr(GBytes) device_random = g_bytes_from_hex (device_random_hex);
+  g_autoptr(GBytes) connect_mac = g_bytes_from_hex ("6f7542a0293d36e1e0bf665d9ca9d8046f5ffa977f7517c8b3c6cd62f73d7c06");
+  g_autoptr(GBytes) model_signature = g_bytes_from_hex (model_signature_hex);
+  g_autoptr(GError) error = NULL;
+  FpiSdcpClaim *claim = get_fake_sdcp_claim ();
+
+  g_clear_pointer (&claim->model_signature, g_bytes_unref);
+  claim->model_signature = g_bytes_with_first_byte_flipped (model_signature);
+  fpi_sdcp_test_set_verification_time (1672531200);
+
+  g_assert_false (fpi_sdcp_verify_connect (host_private_key,
+                                            host_random,
+                                            device_random,
+                                            claim,
+                                            connect_mac,
+                                            TRUE,
+                                            TRUE,
+                                            &application_secret,
+                                            &error));
+  g_assert_nonnull (error);
+  g_assert_null (application_secret);
+  fpi_sdcp_claim_free (claim);
+  fpi_sdcp_test_set_verification_time (0);
+}
+
+static void
+test_verify_connect_rejects_bad_device_signature (void)
+{
+  g_autoptr(GBytes) application_secret = NULL;
+  g_autoptr(GBytes) host_private_key = g_bytes_from_hex (host_private_key_hex);
+  g_autoptr(GBytes) host_random = g_bytes_from_hex (host_random_hex);
+  g_autoptr(GBytes) device_random = g_bytes_from_hex (device_random_hex);
+  g_autoptr(GBytes) connect_mac = g_bytes_from_hex ("d6e7f4d5d53a80ff5031ddadd72bba718cbae9551b70f0aed05d081455713387");
+  g_autoptr(GBytes) device_signature = g_bytes_from_hex (device_signature_hex);
+  g_autoptr(GError) error = NULL;
+  FpiSdcpClaim *claim = get_fake_sdcp_claim ();
+
+  g_clear_pointer (&claim->device_signature, g_bytes_unref);
+  claim->device_signature = g_bytes_with_first_byte_flipped (device_signature);
+  fpi_sdcp_test_set_verification_time (1672531200);
+
+  g_assert_false (fpi_sdcp_verify_connect (host_private_key,
+                                            host_random,
+                                            device_random,
+                                            claim,
+                                            connect_mac,
+                                            TRUE,
+                                            TRUE,
+                                            &application_secret,
+                                            &error));
+  g_assert_nonnull (error);
+  g_assert_null (application_secret);
+  fpi_sdcp_claim_free (claim);
+  fpi_sdcp_test_set_verification_time (0);
+}
+
+static void
+test_verify_connect_rejects_expired_certificate (void)
+{
+  g_autoptr(GBytes) application_secret = NULL;
+  g_autoptr(GBytes) host_private_key = g_bytes_from_hex (host_private_key_hex);
+  g_autoptr(GBytes) host_random = g_bytes_from_hex (host_random_hex);
+  g_autoptr(GBytes) device_random = g_bytes_from_hex (device_random_hex);
+  g_autoptr(GBytes) connect_mac = g_bytes_from_hex (connect_mac_hex);
+  g_autoptr(GError) error = NULL;
+  FpiSdcpClaim *claim = get_fake_sdcp_claim ();
+
+  fpi_sdcp_test_set_verification_time (0);
+  g_assert_false (fpi_sdcp_verify_connect (host_private_key,
+                                            host_random,
+                                            device_random,
+                                            claim,
+                                            connect_mac,
+                                            TRUE,
+                                            FALSE,
+                                            &application_secret,
+                                            &error));
+  g_assert_nonnull (error);
+  g_assert_null (application_secret);
+  fpi_sdcp_claim_free (claim);
+}
+
+/* Generate an independent signer and a test-only trust anchor. None of these
+ * keys or certificates is embedded in the production truststore. */
+static X509 *
+make_test_certificate (EVP_PKEY *key)
+{
+  X509 *cert = X509_new ();
+  X509_NAME *subject;
+  X509V3_CTX context;
+  const int nids[] = {NID_basic_constraints, NID_key_usage, NID_subject_key_identifier, NID_authority_key_identifier};
+  const char *values[] = {"critical,CA:TRUE", "critical,keyCertSign,digitalSignature", "hash", "keyid:always"};
+
+  g_assert_nonnull (cert);
+  g_assert_cmpint (X509_set_version (cert, 2), ==, 1);
+  g_assert_cmpint (ASN1_INTEGER_set (X509_get_serialNumber (cert), 1), ==, 1);
+  g_assert_cmpint (ASN1_TIME_set_string (X509_getm_notBefore (cert), "20200101000000Z"), ==, 1);
+  g_assert_cmpint (ASN1_TIME_set_string (X509_getm_notAfter (cert), "20400101000000Z"), ==, 1);
+  g_assert_cmpint (X509_set_pubkey (cert, key), ==, 1);
+  subject = X509_get_subject_name (cert);
+  g_assert_cmpint (X509_NAME_add_entry_by_txt (subject, "CN", MBSTRING_ASC,
+                                             (const guint8 *) "libfprint unit test", -1, -1, 0), ==, 1);
+  g_assert_cmpint (X509_set_issuer_name (cert, subject), ==, 1);
+  X509V3_set_ctx (&context, cert, cert, NULL, NULL, 0);
+  for (guint i = 0; i < G_N_ELEMENTS (nids); i++)
+    {
+      X509_EXTENSION *extension = X509V3_EXT_conf_nid (NULL, &context, nids[i], values[i]);
+
+      g_assert_nonnull (extension);
+      g_assert_cmpint (X509_add_ext (cert, extension, -1), ==, 1);
+      X509_EXTENSION_free (extension);
+    }
+  g_assert_cmpint (X509_sign (cert, key, EVP_sha256 ()), >, 0);
+  return cert;
+}
+
+static GBytes *
+sign_test_message (EVP_PKEY *key, const guint8 *prefix, gsize prefix_length,
+                   GBytes *a, GBytes *b)
+{
+  EVP_MD_CTX *context = EVP_MD_CTX_new ();
+  ECDSA_SIG *signature;
+  g_autofree guint8 *der = NULL;
+  const guint8 *cursor;
+  const BIGNUM *r, *v;
+  guint8 raw[SDCP_SIGNATURE_SIZE];
+  size_t size;
+
+  g_assert_cmpint (EVP_DigestSignInit (context, NULL, EVP_sha256 (), NULL, key), ==, 1);
+  if (prefix_length)
+    g_assert_cmpint (EVP_DigestSignUpdate (context, prefix, prefix_length), ==, 1);
+  g_assert_cmpint (EVP_DigestSignUpdate (context, g_bytes_get_data (a, NULL), g_bytes_get_size (a)), ==, 1);
+  if (b)
+    g_assert_cmpint (EVP_DigestSignUpdate (context, g_bytes_get_data (b, NULL), g_bytes_get_size (b)), ==, 1);
+  g_assert_cmpint (EVP_DigestSignFinal (context, NULL, &size), ==, 1);
+  der = g_malloc (size);
+  g_assert_cmpint (EVP_DigestSignFinal (context, der, &size), ==, 1);
+  cursor = der;
+  signature = d2i_ECDSA_SIG (NULL, &cursor, size);
+  g_assert_nonnull (signature);
+  ECDSA_SIG_get0 (signature, &r, &v);
+  g_assert_cmpint (BN_bn2binpad (r, raw, sizeof (raw) / 2), ==, sizeof (raw) / 2);
+  g_assert_cmpint (BN_bn2binpad (v, raw + sizeof (raw) / 2, sizeof (raw) / 2), ==, sizeof (raw) / 2);
+  ECDSA_SIG_free (signature);
+  EVP_MD_CTX_free (context);
+  return g_bytes_new (raw, sizeof (raw));
+}
+
+static void
+test_authenticated_connect (void)
+{
+  EVP_PKEY *model_key = EVP_EC_gen ("P-256");
+  EVP_PKEY *device_key = EVP_EC_gen ("P-256");
+  X509 *certificate = make_test_certificate (model_key);
+  g_autoptr(FpiSdcpClaim) good_claim = get_fake_sdcp_claim ();
+  g_autoptr(GBytes) host_private_key = g_bytes_from_hex (host_private_key_hex);
+  g_autoptr(GBytes) host_random = g_bytes_from_hex (host_random_hex);
+  g_autoptr(GBytes) device_random = g_bytes_from_hex (device_random_hex);
+  g_autoptr(GBytes) secret = g_bytes_from_hex (application_secret_hex);
+  guint8 *der = NULL;
+  int der_length = i2d_X509 (certificate, &der);
+  const guint8 prefix[] = {0xc0, 0x01};
+  const guint8 zero_signature[SDCP_SIGNATURE_SIZE] = {0};
+
+  g_assert_cmpint (der_length, >, 0);
+  g_clear_pointer (&good_claim->model_certificate, g_bytes_unref);
+  good_claim->model_certificate = g_bytes_new (der, der_length);
+  OPENSSL_free (der);
+  g_clear_pointer (&good_claim->device_public_key, g_bytes_unref);
+  good_claim->device_public_key = fpi_sdcp_get_public_key (device_key, NULL);
+  g_clear_pointer (&good_claim->model_signature, g_bytes_unref);
+  good_claim->model_signature = sign_test_message (model_key, NULL, 0, good_claim->device_public_key, NULL);
+  g_clear_pointer (&good_claim->device_signature, g_bytes_unref);
+  good_claim->device_signature = sign_test_message (device_key, prefix, sizeof (prefix),
+                                                    good_claim->firmware_hash, good_claim->firmware_public_key);
+  test_trust_anchor = certificate;
+  fpi_sdcp_test_set_verification_time (1672531200);
+
+  for (guint mutation = 0; mutation < 9; mutation++)
+    {
+      g_autoptr(FpiSdcpClaim) claim = fpi_sdcp_claim_copy (good_claim);
+      g_autoptr(GBytes) hash = NULL;
+      g_autoptr(GBytes) mac = NULL;
+      g_autoptr(GBytes) result = NULL;
+      g_autoptr(GError) error = NULL;
+      gboolean accepted;
+
+      if (mutation == 1 || mutation == 2)
+        {
+          GBytes **field = mutation == 1 ? &claim->model_signature : &claim->device_signature;
+          g_clear_pointer (field, g_bytes_unref);
+          *field = g_bytes_new_static (zero_signature, sizeof (zero_signature));
+        }
+      else if (mutation == 3)
+        {
+          GBytes *tmp = claim->model_signature;
+          claim->model_signature = claim->device_signature;
+          claim->device_signature = tmp;
+        }
+      else if (mutation == 4)
+        {
+          g_clear_pointer (&claim->device_signature, g_bytes_unref);
+          claim->device_signature = sign_test_message (model_key, prefix, sizeof (prefix),
+                                                        claim->firmware_hash, claim->firmware_public_key);
+        }
+      else if (mutation == 5)
+        {
+          g_clear_pointer (&claim->device_signature, g_bytes_unref);
+          claim->device_signature = sign_test_message (device_key, (const guint8 *) "C001", 4,
+                                                        claim->firmware_hash, claim->firmware_public_key);
+        }
+      else if (mutation == 6)
+        {
+          g_clear_pointer (&claim->firmware_hash, g_bytes_unref);
+          claim->firmware_hash = g_bytes_with_first_byte_flipped (good_claim->firmware_hash);
+        }
+      else if (mutation == 7)
+        {
+          test_trust_anchor = NULL;
+        }
+      /* Recompute the transport MAC so each mutation reaches attestation. */
+      hash = fpi_sdcp_hash_claim (claim, &error);
+      g_assert_no_error (error);
+      mac = fpi_sdcp_mac (secret, "connect", hash, NULL, &error);
+      g_assert_no_error (error);
+      accepted = fpi_sdcp_verify_connect (host_private_key, host_random, device_random,
+                                           claim, mac, mutation != 8, TRUE, &result, &error);
+      g_assert_cmpint (accepted, ==, mutation == 0);
+      if (mutation == 0)
+        {
+          g_assert_no_error (error);
+          g_assert_true (g_bytes_equal (result, secret));
+        }
+      else
+        {
+          g_assert_error (error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_UNTRUSTED);
+          g_assert_null (result);
+          if (mutation == 8)
+            g_assert_cmpstr (error->message, ==, "Signature verification requires a validated certificate");
+        }
+    }
+  test_trust_anchor = NULL;
+  fpi_sdcp_test_set_verification_time (0);
+  X509_free (certificate);
+  EVP_PKEY_free (device_key);
+  EVP_PKEY_free (model_key);
 }
 
 static void
@@ -164,9 +596,6 @@ test_generate_random (void)
 
   g_assert_null (error);
   g_assert (g_bytes_get_size (random) == SDCP_RANDOM_SIZE);
-
-  fp_dbg ("random:");
-  fp_dbg_hex_dump_gbytes (random);
 }
 
 static void
@@ -184,14 +613,8 @@ test_generate_host_key (void)
   g_bytes_get_data (private_key, &len);
   g_assert (len == 32);
 
-  fp_dbg ("private_key:");
-  fp_dbg_hex_dump_gbytes (private_key);
-
   g_bytes_get_data (public_key, &len);
   g_assert (len == SDCP_PUBLIC_KEY_SIZE);
-
-  fp_dbg ("public_key:");
-  fp_dbg_hex_dump_gbytes (public_key);
 }
 
 int
@@ -199,9 +622,20 @@ main (int argc, char *argv[])
 {
   g_test_init (&argc, &argv, NULL);
 
+  g_test_add_func ("/sdcp/authenticated_connect", test_authenticated_connect);
   g_test_add_func ("/sdcp/generate_host_key", test_generate_host_key);
   g_test_add_func ("/sdcp/generate_random", test_generate_random);
   g_test_add_func ("/sdcp/verify_connect", test_verify_connect);
+  g_test_add_func ("/sdcp/verify_connect/validates_certificate_at_fixture_time",
+                   test_verify_connect_validates_certificate_at_fixture_time);
+  g_test_add_func ("/sdcp/verify_device_signature/vector", test_verify_device_signature_vector);
+  g_test_add_func ("/sdcp/verify_device_signature/modified", test_verify_device_signature_rejects_modified_vector);
+  g_test_add_func ("/sdcp/verify_connect/bad_mac", test_verify_connect_rejects_bad_mac);
+  g_test_add_func ("/sdcp/verify_connect/modified_claim", test_verify_connect_rejects_modified_claim);
+  g_test_add_func ("/sdcp/verify_connect/wrong_key", test_verify_connect_rejects_wrong_key);
+  g_test_add_func ("/sdcp/verify_connect/bad_model_signature", test_verify_connect_rejects_bad_model_signature);
+  g_test_add_func ("/sdcp/verify_connect/bad_device_signature", test_verify_connect_rejects_bad_device_signature);
+  g_test_add_func ("/sdcp/verify_connect/expired_certificate", test_verify_connect_rejects_expired_certificate);
   g_test_add_func ("/sdcp/verify_reconnect", test_verify_reconnect);
   g_test_add_func ("/sdcp/verify_identify", test_verify_identify);
   g_test_add_func ("/sdcp/generate_enrollment_id", test_generate_enrollment_id);

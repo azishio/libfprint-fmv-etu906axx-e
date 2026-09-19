@@ -172,6 +172,17 @@ fpi_sdcp_device_set_application_secret (FpSdcpDevice *self,
   g_object_set (G_OBJECT (self), "sdcp-data", application_secret, NULL);
 }
 
+static void
+sdcp_complete_open (FpSdcpDevice *self, GError *error)
+{
+  FpDevice *device = FP_DEVICE (self);
+
+  /* The core closes USB only after a successful open followed by close. */
+  if (error && FP_DEVICE_GET_CLASS (device)->type == FP_DEVICE_TYPE_USB)
+    g_usb_device_close (fpi_device_get_usb_device (device), NULL);
+  fpi_device_open_complete (device, error);
+}
+
 void
 fpi_sdcp_device_open (FpSdcpDevice *self)
 {
@@ -276,39 +287,33 @@ fpi_sdcp_device_list (FpSdcpDevice *self)
 void
 fpi_sdcp_device_enroll (FpSdcpDevice *self)
 {
-  FpSdcpDeviceClass *cls = FP_SDCP_DEVICE_GET_CLASS (self);
 
-  g_autoptr(GBytes) application_secret = NULL;
   FpPrint *print;
 
   g_return_if_fail (FP_IS_SDCP_DEVICE (self));
   g_return_if_fail (fpi_device_get_current_action (FP_DEVICE (self)) == FPI_DEVICE_ACTION_ENROLL);
-  fpi_sdcp_device_get_application_secret (self, &application_secret);
-  g_return_if_fail (application_secret != NULL);
 
   fpi_device_get_enroll_data (FP_DEVICE (self), &print);
 
   fpi_print_set_device_stored (print, FALSE);
   g_object_set (print, "fpi-data", NULL, NULL);
 
-  cls->enroll (self);
+  /* A fresh connection also covers idle suspend, for which the core does not
+   * invoke driver suspend/resume hooks. Never use a cached authentication key. */
+  fpi_sdcp_device_connect (self);
 }
 
 void
 fpi_sdcp_device_identify (FpSdcpDevice *self)
 {
   FpSdcpDevicePrivate *priv = fp_sdcp_device_get_instance_private (self);
-  FpSdcpDeviceClass *cls = FP_SDCP_DEVICE_GET_CLASS (self);
 
-  g_autoptr(GBytes) application_secret = NULL;
   FpiDeviceAction action;
   GError *error = NULL;
 
   g_return_if_fail (FP_IS_SDCP_DEVICE (self));
   action = fpi_device_get_current_action (FP_DEVICE (self));
   g_return_if_fail (action == FPI_DEVICE_ACTION_IDENTIFY || action == FPI_DEVICE_ACTION_VERIFY);
-  fpi_sdcp_device_get_application_secret (self, &application_secret);
-  g_return_if_fail (application_secret != NULL);
 
   g_clear_pointer (&priv->identify_nonce, g_bytes_unref);
 
@@ -328,7 +333,7 @@ fpi_sdcp_device_identify (FpSdcpDevice *self)
       priv->identify_nonce = g_bytes_new (test_identify_nonce, sizeof (test_identify_nonce));
     }
 
-  cls->identify (self);
+  fpi_sdcp_device_connect (self);
 }
 
 /*********************************************************/
@@ -364,11 +369,11 @@ fpi_sdcp_device_open_complete (FpSdcpDevice *self,
 
       /* Complete open if we are already connected */
       else
-        fpi_device_open_complete (FP_DEVICE (self), NULL);
+        sdcp_complete_open (self, NULL);
     }
   else
     {
-      fpi_device_open_complete (FP_DEVICE (self), error);
+      sdcp_complete_open (self, error);
     }
 }
 
@@ -469,9 +474,9 @@ fpi_sdcp_device_set_identify_data (FpSdcpDevice *self,
 /**
  * fpi_sdcp_device_connect_complete:
  * @self: a #FpSdcpDevice fingerprint device
- * @device_random: The device random
- * @claim: The device #FpiSdcpClaim
- * @mac: The MAC authenticating @claim
+ * @device_random: (transfer none): The device random
+ * @claim: (transfer none): The device #FpiSdcpClaim
+ * @mac: (transfer none): The MAC authenticating @claim
  * @error: A #GError or %NULL on success
  *
  * Reports completion of connect operation. Responsible for performing SDCP key
@@ -487,72 +492,43 @@ fpi_sdcp_device_connect_complete (FpSdcpDevice *self,
 {
   FpSdcpDevicePrivate *priv = fp_sdcp_device_get_instance_private (self);
   FpSdcpDeviceClass *cls = FP_SDCP_DEVICE_GET_CLASS (self);
-
   g_autoptr(GBytes) application_secret = NULL;
-  FpiDeviceAction action;
+  FpiDeviceAction action = fpi_device_get_current_action (FP_DEVICE (self));
 
-  action = fpi_device_get_current_action (FP_DEVICE (self));
+  g_return_if_fail (action == FPI_DEVICE_ACTION_OPEN || action == FPI_DEVICE_ACTION_ENROLL ||
+                    action == FPI_DEVICE_ACTION_VERIFY || action == FPI_DEVICE_ACTION_IDENTIFY);
 
-  g_return_if_fail (action == FPI_DEVICE_ACTION_OPEN);
-  g_return_if_fail (priv->host_private_key);
-  g_return_if_fail (priv->host_random);
+  /* The payload is borrowed from the driver, including on failure. */
+  if (!error && (!priv->host_private_key || !priv->host_random ||
+                 !device_random || !claim || !mac ||
+                 !claim->model_certificate || !claim->device_public_key ||
+                 !claim->firmware_public_key || !claim->firmware_hash ||
+                 !claim->model_signature || !claim->device_signature))
+    error = fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO,
+                                      "Incomplete SDCP ConnectResponse");
 
-  if (error)
+  if (!error && !fpi_sdcp_verify_connect (priv->host_private_key, priv->host_random,
+                                         device_random, claim, mac,
+                                         !cls->ignore_device_certificate,
+                                         !cls->ignore_device_signatures,
+                                         &application_secret, &error))
     {
-      if (device_random || claim || mac)
-        {
-          g_clear_pointer (&device_random, g_bytes_unref);
-          g_clear_pointer (&claim, fpi_sdcp_claim_free);
-          g_clear_pointer (&mac, g_bytes_unref);
-          fp_warn ("Driver provided SDCP Connect information but also reported error.");
-        }
-
-      fpi_device_open_complete (FP_DEVICE (self), error);
-      return;
+      if (!error)
+        error = fpi_device_error_new (FP_DEVICE_ERROR_UNTRUSTED);
     }
 
-  if (!device_random || !claim || !mac ||
-      (!claim->model_certificate || !claim->device_public_key || !claim->firmware_public_key ||
-       !claim->firmware_hash || !claim->model_signature || !claim->device_signature))
-    {
-      fp_dbg ("Driver did not provide all required information to callback; returning error instead.");
-      g_clear_pointer (&device_random, g_bytes_unref);
-      g_clear_pointer (&claim, fpi_sdcp_claim_free);
-      g_clear_pointer (&mac, g_bytes_unref);
-
-      fpi_device_open_complete (FP_DEVICE (self),
-                                fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
-                                                          "Driver called connect complete with "
-                                                          "incomplete arguments"));
-      return;
-    }
-
-  /* Verify connect and store the application_secret */
-  if (!fpi_sdcp_verify_connect (priv->host_private_key,
-                                priv->host_random,
-                                device_random,
-                                claim,
-                                mac,
-                                !cls->ignore_device_certificate,
-                                !cls->ignore_device_signatures,
-                                &application_secret,
-                                &error))
-    {
-      fpi_device_open_complete (FP_DEVICE (self),
-                                fpi_device_error_new_msg (FP_DEVICE_ERROR_UNTRUSTED,
-                                                          "SDCP Connect verification failed: %s",
-                                                          error->message));
-      return;
-    }
-
-  fpi_sdcp_device_set_application_secret (self, application_secret);
-
-  /* Clear no longer needed private data */
+  g_object_set (self, "sdcp-data", application_secret, NULL);
   g_clear_pointer (&priv->host_private_key, g_bytes_unref);
   g_clear_pointer (&priv->host_public_key, g_bytes_unref);
   g_clear_pointer (&priv->host_random, g_bytes_unref);
-
-  fpi_device_open_complete (FP_DEVICE (self), NULL);
+  if (action == FPI_DEVICE_ACTION_OPEN)
+    sdcp_complete_open (self, error);
+  else if (error)
+    fpi_device_action_error (FP_DEVICE (self), error);
+  else if (action == FPI_DEVICE_ACTION_ENROLL)
+    cls->enroll (self);
+  else
+    cls->identify (self);
 }
 
 /**
@@ -596,7 +572,7 @@ fpi_sdcp_device_reconnect_complete (FpSdcpDevice *self,
       if (fpi_sdcp_verify_reconnect (application_secret, priv->reconnect_random, mac, &error))
         {
           fp_dbg ("SDCP Reconnect succeeded");
-          fpi_device_open_complete (FP_DEVICE (self), NULL);
+          sdcp_complete_open (self, NULL);
         }
       else
         {
@@ -606,7 +582,7 @@ fpi_sdcp_device_reconnect_complete (FpSdcpDevice *self,
     }
   else
     {
-      fpi_device_open_complete (FP_DEVICE (self),
+      sdcp_complete_open (self,
                                 fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
                                                           "Driver called reconnect complete with wrong arguments"));
     }

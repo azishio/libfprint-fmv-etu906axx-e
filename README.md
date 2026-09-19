@@ -1,4 +1,7 @@
-
+> This fork targets the Fujitsu LIFEBOOK ETU906Axx-E (`1c7a:05b1`) on Linux
+> x86_64. See [ETU906.md](ETU906.md) for packaging, verification status and
+> limitations. Hardware acceptance is not complete; CI success does not certify
+> login or unlock support.
 
 <div align="center">
 
