@@ -465,7 +465,9 @@ test_expired_certificate_pin (void)
   g_clear_error (&error);
   fpi_sdcp_test_set_verification_time (2303683200); /* 2043 */
   g_assert_false (fpi_sdcp_verify_certificate (cert, &error));
-  g_assert_nonnull (error);
+  g_assert_nonnull (strstr (error->message, "certificate has expired"));
+  g_assert_nonnull (strstr (error->message, "depth="));
+  g_assert_null (strstr (error->message, "depth=0;"));
   g_clear_error (&error);
 
   /* Even pinning the modified certificate cannot waive its broken signature. */
